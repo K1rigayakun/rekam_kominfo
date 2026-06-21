@@ -160,11 +160,26 @@ export async function sectionRoutes(fastify: FastifyInstance) {
   fastify.delete(
     '/:activityId/sections/:id',
     async (
-      request: FastifyRequest<{ Params: { activityId: string; id: string } }>,
+      request: FastifyRequest<{ Params: { activityId: string; id: string }; Body: { action?: string } }>,
       reply: FastifyReply
     ) => {
       const { id } = request.params;
       const user = request.currentUser!;
+      const action = request.body?.action;
+
+      if (action === 'MOVE_MEDIA_TO_UNSECTIONED') {
+        await fastify.db.query('UPDATE media_files SET section_id = NULL WHERE section_id = $1', [id]);
+        await fastify.db.query('UPDATE event_attachments SET section_id = NULL WHERE section_id = $1', [id]);
+      } else if (action === 'DELETE_MEDIA') {
+        // Find media to delete from MinIO
+        const { rows: media } = await fastify.db.query('SELECT storage_key_raw FROM media_files WHERE section_id = $1', [id]);
+        for (const m of media) {
+          try {
+             await fastify.minio.removeObject(fastify.minioBuckets.raw, m.storage_key_raw).catch(() => {});
+          } catch(e) {}
+        }
+        // DB deletion will be handled by CASCADE
+      }
 
       const { rowCount } = await fastify.db.query('DELETE FROM event_sections WHERE id = $1', [id]);
 

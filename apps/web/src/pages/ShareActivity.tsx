@@ -5,7 +5,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { AxiosError } from 'axios';
 import {
-  ArrowLeft, Share2, Loader2, Copy, X, Trash2, Eye, Link as LinkIcon, BarChart2, Download
+  ArrowLeft, Share2, Loader2, Copy, X, Trash2, Eye, Link as LinkIcon, BarChart2, Download, CheckCircle
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuthStore } from '../stores/authStore';
@@ -189,6 +189,17 @@ export default function ShareActivityPage() {
     } catch (err) {
       const e = err as AxiosError<{error: string}>;
       toast.error(e.response?.data?.error || 'Gagal menonaktifkan link');
+    }
+  };
+
+  const handleReactivate = async (shareId: string) => {
+    try {
+      await api.put(`/api/sharing/${shareId}/reactivate`);
+      fetchShares();
+      toast.success('Link berhasil diaktifkan kembali');
+    } catch (err) {
+      const e = err as AxiosError<{error: string}>;
+      toast.error(e.response?.data?.error || 'Gagal mengaktifkan link');
     }
   };
 
@@ -552,15 +563,26 @@ export default function ShareActivityPage() {
                         </span>
                       </div>
                     </div>
-                    {isAdmin && share.is_active && (
-                      <button 
-                        onClick={() => handleDeactivate(share.id)}
-                        className="p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors"
-                        title="Nonaktifkan Link"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
+                    <div className="flex gap-1">
+                      {isAdmin && !share.is_active && (
+                        <button 
+                          onClick={() => handleReactivate(share.id)}
+                          className="p-1.5 text-gray-400 hover:bg-green-50 hover:text-green-600 rounded-lg transition-colors"
+                          title="Aktifkan Link"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                        </button>
+                      )}
+                      {isAdmin && share.is_active && (
+                        <button 
+                          onClick={() => handleDeactivate(share.id)}
+                          className="p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors"
+                          title="Nonaktifkan Link"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                   
                   {share.is_active && (

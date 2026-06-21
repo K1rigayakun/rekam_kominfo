@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import path from 'path';
 import '@fastify/multipart';
 
@@ -129,6 +129,32 @@ export async function mediaRoutes(fastify: FastifyInstance) {
     return reply.send({ message: 'Urutan media berhasil diperbarui' });
   });
 
+  // ─── GET /api/media/verify-upload ─────────
+  // Desktop app calls this after TUS upload before deleting local staging.
+  fastify.get('/verify-upload', async (request: FastifyRequest, reply: FastifyReply) => {
+    const query = z.object({
+      activity_id: z.string().uuid(),
+      filename: z.string().min(1),
+      sha256: z.string().length(64),
+    }).parse(request.query);
+
+    const { rows } = await fastify.db.query(
+      `SELECT id, checksum_sha256, status, created_at
+       FROM media_files
+       WHERE activity_id = $1
+         AND original_filename = $2
+         AND checksum_sha256 = $3
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [query.activity_id, query.filename, query.sha256]
+    );
+
+    return reply.send({
+      verified: rows.length > 0,
+      data: rows[0] || null,
+    });
+  });
+
   // ─── GET /api/media/:id ────────────────────
   fastify.get('/:id', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     const { id } = request.params;
@@ -192,6 +218,12 @@ export async function mediaRoutes(fastify: FastifyInstance) {
 
     // Upload ke MinIO (raw bucket)
     const fileBuffer = await data.toBuffer();
+
+    // Hitung SHA-256
+    const hash = createHash('sha256');
+    hash.update(fileBuffer);
+    const checksumSha256 = hash.digest('hex');
+
     await fastify.minio.putObject(fastify.minioBuckets.raw, storageKey, fileBuffer, fileBuffer.length, {
       'Content-Type': mimeType,
     });
@@ -200,12 +232,12 @@ export async function mediaRoutes(fastify: FastifyInstance) {
     const { rows } = await fastify.db.query(
       `INSERT INTO media_files 
        (section_id, activity_id, original_filename, media_type, mime_type, 
-        file_size_bytes, storage_key_raw, status, uploaded_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'PROCESSING', $8)
+        file_size_bytes, storage_key_raw, checksum_sha256, status, uploaded_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PROCESSING', $9)
        RETURNING *`,
       [
         sectionId, activityId, data.filename, mediaType, mimeType,
-        fileBuffer.length, storageKey, user.id,
+        fileBuffer.length, storageKey, checksumSha256, user.id,
       ]
     );
 
@@ -219,6 +251,9 @@ export async function mediaRoutes(fastify: FastifyInstance) {
       mimeType,
       mediaType,
       storageKeyRaw: storageKey,
+    }, {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5000 }
     });
 
     // Log audit

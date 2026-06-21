@@ -116,6 +116,8 @@ export default function ActivityDetailPage() {
   const [savingActivity, setSavingActivity] = useState(false);
   const [deletingActivity, setDeletingActivity] = useState(false);
 
+  const [deleteSectionState, setDeleteSectionState] = useState<{ sectionId: string; action: 'MOVE_MEDIA_TO_UNSECTIONED' | 'DELETE_MEDIA' } | null>(null);
+
   const fetchActivity = useCallback(async () => {
     try {
       setLoading(true);
@@ -281,16 +283,19 @@ export default function ActivityDetailPage() {
     }
   };
 
-  const handleDeleteSection = async (sectionId: string) => {
-    const isConfirmed = await confirm({
-      title: 'Hapus Seksi',
-      message: 'Hapus seksi ini? Media di dalamnya akan kehilangan relasi seksi, tapi media tidak akan terhapus.',
-      confirmText: 'Hapus Seksi',
-    });
-    if (!isConfirmed) return;
+  const handleDeleteSection = (sectionId: string) => {
+    setDeleteSectionState({ sectionId, action: 'MOVE_MEDIA_TO_UNSECTIONED' });
+  };
+
+  const confirmDeleteSection = async () => {
+    if (!deleteSectionState) return;
     try {
-      await api.delete(`/api/activities/${id}/sections/${sectionId}`);
+      await api.delete(`/api/activities/${id}/sections/${deleteSectionState.sectionId}`, {
+        data: { action: deleteSectionState.action }
+      });
       fetchActivity();
+      setDeleteSectionState(null);
+      toast.success('Seksi berhasil dihapus');
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Gagal menghapus seksi');
     }
@@ -1357,6 +1362,67 @@ export default function ActivityDetailPage() {
                   disabled={uploadingAttachment}
                 />
               </label>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Hapus Seksi */}
+      {deleteSectionState && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-gray-900 mb-2">Hapus Judul/Seksi</h2>
+            <p className="text-sm text-gray-600 mb-6">Apa yang ingin Anda lakukan dengan media di dalam seksi ini?</p>
+
+            <div className="space-y-3 mb-6">
+              <label className={`block p-4 rounded-xl border cursor-pointer premium-transition ${deleteSectionState.action === 'MOVE_MEDIA_TO_UNSECTIONED' ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                <div className="flex items-start gap-3">
+                  <input
+                    type="radio"
+                    name="deleteAction"
+                    className="mt-1 w-4 h-4 text-primary-600"
+                    checked={deleteSectionState.action === 'MOVE_MEDIA_TO_UNSECTIONED'}
+                    onChange={() => setDeleteSectionState({ ...deleteSectionState, action: 'MOVE_MEDIA_TO_UNSECTIONED' })}
+                  />
+                  <div>
+                    <span className="block font-semibold text-gray-900 text-sm mb-0.5">Pindahkan ke Luar Seksi</span>
+                    <span className="block text-xs text-gray-500">Media akan tetap ada di acara ini, tetapi tidak akan dikelompokkan ke dalam judul apapun.</span>
+                  </div>
+                </div>
+              </label>
+
+              <label className={`block p-4 rounded-xl border cursor-pointer premium-transition ${deleteSectionState.action === 'DELETE_MEDIA' ? 'border-red-500 bg-red-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                <div className="flex items-start gap-3">
+                  <input
+                    type="radio"
+                    name="deleteAction"
+                    className="mt-1 w-4 h-4 text-red-600 focus:ring-red-500"
+                    checked={deleteSectionState.action === 'DELETE_MEDIA'}
+                    onChange={() => setDeleteSectionState({ ...deleteSectionState, action: 'DELETE_MEDIA' })}
+                  />
+                  <div>
+                    <span className="block font-semibold text-red-700 text-sm mb-0.5">Hapus Semua Media (Permanen)</span>
+                    <span className="block text-xs text-red-500">Semua media di dalam seksi ini akan dihapus secara permanen dari sistem.</span>
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setDeleteSectionState(null)}
+                className="flex-1 py-2.5 px-4 border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 premium-transition"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteSection}
+                className={`flex-1 py-2.5 px-4 rounded-xl font-medium flex justify-center items-center premium-transition text-white ${deleteSectionState.action === 'DELETE_MEDIA' ? 'bg-red-600 hover:bg-red-700 shadow-lg shadow-red-500/20' : 'bg-primary-600 hover:bg-primary-700 shadow-lg shadow-primary-500/20'}`}
+              >
+                Hapus
+              </button>
             </div>
           </div>
         </div>

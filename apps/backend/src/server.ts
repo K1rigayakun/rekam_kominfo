@@ -4,6 +4,7 @@ import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
+import multipart from '@fastify/multipart';
 
 // Plugins
 import { dbPlugin } from './plugins/db';
@@ -102,6 +103,13 @@ async function main() {
   // ─── JWT ───────────────────────────────────
   await server.register(jwt, {
     secret: requireEnv('JWT_ACCESS_SECRET'),
+  });
+
+  // ─── Multipart ─────────────────────────────
+  await server.register(multipart, {
+    limits: {
+      fileSize: 10 * 1024 * 1024 * 1024, // 10 GB
+    },
   });
 
   // ─── Infrastructure Plugins ────────────────

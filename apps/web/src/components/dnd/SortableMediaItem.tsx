@@ -109,7 +109,7 @@ export function SortableMediaItem({ id, media, onClick, filterUneditedOnly, view
                <AlertTriangle className="w-3 h-3" /> Rusak
              </span>
            ) : isLocallyEdited ? null : (
-             <span className="px-2 py-1 bg-amber-50 text-amber-600 text-[10px] font-bold rounded-md uppercase shrink-0">Draft</span>
+             <span className="px-2 py-1 bg-amber-50 text-amber-600 text-[10px] font-bold rounded-md uppercase shrink-0">Belum Diedit</span>
           )}
         </div>
       ) : (
@@ -144,7 +144,7 @@ export function SortableMediaItem({ id, media, onClick, filterUneditedOnly, view
               </span>
             ) : !isLocallyEdited && (
               <span className="absolute top-[-20px] right-2 px-1.5 py-0.5 bg-amber-500 text-white text-[9px] font-bold rounded uppercase shadow-sm">
-                Draft
+                Belum Diedit
               </span>
             )}
           </div>

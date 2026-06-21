@@ -134,6 +134,7 @@ async function processVideo(mediaId: string, storageKeyRaw: string, activityId: 
           // Transcoding to multiple resolutions
           const resolutions = [
             { label: '360p', height: '360' },
+            { label: '480p', height: '480' },
             { label: '720p', height: '720' },
             { label: '1080p', height: '1080' }
           ];
@@ -224,7 +225,10 @@ const worker = new Worker(
       throw err;
     }
   },
-  { connection: redis as any }
+  { 
+    connection: redis as any,
+    concurrency: 2
+  }
 );
 
 worker.on('ready', () => {

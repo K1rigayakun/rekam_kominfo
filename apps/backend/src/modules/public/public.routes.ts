@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import archiver from 'archiver';
+import { createHash } from 'crypto';
 
 /**
  * Public routes — TANPA autentikasi.
@@ -37,10 +38,11 @@ export async function publicRoutes(fastify: FastifyInstance) {
     }
 
     // Log scan
+    const ipHash = createHash('sha1').update(request.ip).digest('hex');
     await fastify.db.query(
       `INSERT INTO qr_scan_logs (snapshot_id, ip_address, user_agent)
        VALUES ($1, $2, $3)`,
-      [snap.id, request.ip, request.headers['user-agent'] || '']
+      [snap.id, ipHash, request.headers['user-agent'] || '']
     );
 
     // Update total_scans
@@ -181,19 +183,41 @@ export async function publicRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: 'File resolusi tersebut tidak tersedia' });
       }
 
-      const stream = await fastify.minio.getObject(bucket, key);
+      const stat = await fastify.minio.statObject(bucket, key);
+      const fileSize = stat.size;
 
-      reply.header('Content-Type', quality === 'original' ? file.mime_type : (file.media_type === 'VIDEO' ? 'video/mp4' : 'image/webp'));
+      const contentType = quality === 'original' ? file.mime_type : (file.media_type === 'VIDEO' ? 'video/mp4' : 'image/webp');
+      reply.header('Content-Type', contentType);
       reply.header(
         'Content-Disposition',
         `attachment; filename="${file.display_name || file.original_filename}"`
       );
 
+      const range = request.headers.range;
+      let stream;
+
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunksize = (end - start) + 1;
+
+        reply.code(206);
+        reply.header('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+        reply.header('Accept-Ranges', 'bytes');
+        reply.header('Content-Length', chunksize);
+
+        stream = await fastify.minio.getPartialObject(bucket, key, start, chunksize);
+      } else {
+        reply.header('Content-Length', fileSize);
+        stream = await fastify.minio.getObject(bucket, key);
+      }
+
       // Log download
       await fastify.db.query(
         `INSERT INTO audit_logs (action, entity_type, entity_id, details, ip_address)
          VALUES ('DOWNLOAD', 'media_file', $1, $2, $3)`,
-        [mediaId, JSON.stringify({ via: 'public', token }), request.ip]
+        [mediaId, JSON.stringify({ via: 'public', token, range: !!range }), request.ip]
       );
 
       return reply.send(stream);
@@ -277,6 +301,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
       [id, JSON.stringify({ via: 'public', token }), request.ip]
     );
 
+    return reply.send(stream);
   });
 
   // ─── GET /p/:token/download-all/zip ─────────

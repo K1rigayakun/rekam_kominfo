@@ -150,6 +150,37 @@ export async function sharingRoutes(fastify: FastifyInstance) {
     }
   );
 
+  // ─── PUT /api/sharing/:id/reactivate ──────
+  fastify.put(
+    '/:id/reactivate',
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const { id } = request.params;
+      const user = request.currentUser!;
+
+      if (user.role !== 'SUPER_ADMIN') {
+        return reply.status(403).send({ error: 'Akses ditolak: Hanya Admin yang dapat mengaktifkan tautan' });
+      }
+
+      const { rows } = await fastify.db.query(
+        `UPDATE sharing_snapshots SET is_active = true WHERE id = $1 RETURNING *`,
+        [id]
+      );
+
+      if (rows.length === 0) {
+        return reply.status(404).send({ error: 'Snapshot tidak ditemukan' });
+      }
+
+      // Log audit
+      await fastify.db.query(
+        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address)
+         VALUES ($1, 'SHARE', 'sharing_snapshot', $2, $3)`,
+        [user.id, id, request.ip]
+      );
+
+      return reply.send({ data: rows[0] });
+    }
+  );
+
   // ─── GET /api/sharing/:id/analytics ───────
   fastify.get(
     '/:id/analytics',

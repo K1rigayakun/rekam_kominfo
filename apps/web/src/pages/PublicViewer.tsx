@@ -136,6 +136,11 @@ export default function PublicViewerPage() {
     window.open(url, '_blank');
   };
 
+  const handleDownload = (mediaId: string, quality: string = 'original') => {
+    const url = `${api.defaults.baseURL || ''}/api/public/${token}/media/${mediaId}/download?quality=${quality}`;
+    window.open(url, '_blank');
+  };
+
   const pageTitle = info.title || info.activity_title;
 
   return (
@@ -314,32 +319,27 @@ export default function PublicViewerPage() {
                         <p className="text-white text-xs md:text-sm text-center font-medium mb-4 md:mb-6 line-clamp-2 translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
                           {media.display_name}
                         </p>
-                        <div className="flex flex-col sm:flex-row gap-2 translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75">
-                          {(info.download_quality === 'PREVIEW' || info.download_quality === 'BOTH') && media.media_type === 'IMAGE' && (
-                            <button 
-                              onClick={() => handleDownload(media.id, 'preview')}
-                              className="bg-white/20 hover:bg-white/30 backdrop-blur-md border border-white/10 text-white px-3 py-1.5 md:px-4 md:py-2 rounded-xl text-xs font-semibold premium-transition flex items-center justify-center gap-1.5"
-                            >
-                              <Download weight="bold" className="w-3.5 h-3.5" /> Preview
-                            </button>
-                          )}
-                          {(info.download_quality === 'ORIGINAL' || info.download_quality === 'BOTH') && (
-                            <button 
-                              onClick={() => handleDownload(media.id, 'original')}
-                              className="bg-white text-zinc-900 hover:bg-zinc-100 px-3 py-1.5 md:px-4 md:py-2 rounded-xl text-xs font-semibold premium-transition flex items-center justify-center gap-1.5 shadow-xl"
-                            >
-                              <Download weight="bold" className="w-3.5 h-3.5" /> Original
-                            </button>
-                          )}
-                          {media.media_type === 'VIDEO' && (info.download_quality === 'PREVIEW' || info.download_quality === 'BOTH') && media.quality_variants && Object.keys(media.quality_variants).map(quality => (
-                            <button 
-                              key={quality}
-                              onClick={() => handleDownload(media.id, quality as any)}
-                              className="bg-white/20 hover:bg-white/30 backdrop-blur-md border border-white/10 text-white px-3 py-1.5 md:px-4 md:py-2 rounded-xl text-xs font-semibold premium-transition flex items-center justify-center gap-1.5"
-                            >
-                              <Download weight="bold" className="w-3.5 h-3.5" /> {quality}
-                            </button>
-                          ))}
+                        <div className="flex flex-col gap-2 translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75 w-full max-w-[200px] px-4">
+                          <select 
+                            id={`quality-${media.id}`}
+                            className="bg-black/50 text-white text-xs border border-white/20 rounded-xl px-3 py-2 outline-none backdrop-blur-md focus:bg-zinc-800 w-full"
+                            defaultValue={info.download_quality === 'PREVIEW' ? 'preview' : 'original'}
+                          >
+                            {(info.download_quality === 'PREVIEW' || info.download_quality === 'BOTH') && <option value="preview" className="text-zinc-900">Preview</option>}
+                            {media.media_type === 'VIDEO' && (info.download_quality === 'PREVIEW' || info.download_quality === 'BOTH') && media.quality_variants && Object.keys(media.quality_variants).map(q => (
+                              <option key={q} value={q} className="text-zinc-900">{q}</option>
+                            ))}
+                            {(info.download_quality === 'ORIGINAL' || info.download_quality === 'BOTH') && <option value="original" className="text-zinc-900">Original</option>}
+                          </select>
+                          <button 
+                            onClick={() => {
+                              const sel = document.getElementById(`quality-${media.id}`) as HTMLSelectElement;
+                              handleDownload(media.id, sel?.value || 'original');
+                            }}
+                            className="bg-white text-zinc-900 hover:bg-zinc-100 px-3 py-2 rounded-xl text-xs font-semibold premium-transition flex items-center justify-center gap-1.5 shadow-xl w-full"
+                          >
+                            <Download weight="bold" className="w-3.5 h-3.5" /> Download
+                          </button>
                         </div>
                       </div>
                     </div>
