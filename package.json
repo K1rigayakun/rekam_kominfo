@@ -1,0 +1,22 @@
+{
+  "name": "rekam",
+  "version": "0.1.0",
+  "private": true,
+  "description": "REKAM monorepo: backend Fastify API and Vite React web client.",
+  "scripts": {
+    "install:all": "npm --prefix apps/backend install && npm --prefix apps/web install",
+    "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev.ps1",
+    "dev:infra": "docker compose up -d",
+    "dev:backend": "npm --prefix apps/backend run dev",
+    "dev:web": "npm --prefix apps/web run dev -- --host 0.0.0.0",
+    "db:migrate": "npm --prefix apps/backend run db:migrate",
+    "db:seed": "npm --prefix apps/backend run db:seed",
+    "db:check": "npm --prefix apps/backend run db:check",
+    "build": "npm --prefix apps/backend run build && npm --prefix apps/web run build",
+    "lint": "npm --prefix apps/web run lint"
+  },
+  "engines": {
+    "node": ">=20 <23",
+    "npm": ">=10"
+  }
+}

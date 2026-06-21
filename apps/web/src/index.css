@@ -1,0 +1,99 @@
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@900,700,500,400,300&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-primary-50: #eff6ff;
+  --color-primary-100: #dbeafe;
+  --color-primary-200: #bfdbfe;
+  --color-primary-300: #93c5fd;
+  --color-primary-400: #60a5fa;
+  --color-primary-500: #3b82f6;
+  --color-primary-600: #2563eb;
+  --color-primary-700: #1d4ed8;
+  --color-primary-800: #1e40af;
+  --color-primary-900: #1e3a8a;
+  --color-primary-950: #172554;
+
+  --color-surface: #f9fafb; /* Bento 2.0 Background */
+  --color-text-main: #09090b; /* Zinc 950 */
+  --color-text-muted: #71717a; /* Zinc 500 */
+
+  --font-sans: "Satoshi", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", monospace;
+}
+
+/* ─── Custom utilities (Tailwind v4 syntax) ─── */
+@utility glass-panel {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 20px 40px -15px rgba(0, 0, 0, 0.05);
+}
+
+@utility liquid-glass {
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), inset 0 0 20px rgba(255, 255, 255, 0.2), 0 10px 40px -10px rgba(0, 0, 0, 0.05);
+}
+
+@utility diffusion-shadow {
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.05);
+}
+
+@utility bento-card {
+  background-color: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.5); /* border-slate-200/50 */
+  border-radius: 2.5rem;
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.05);
+}
+
+@utility premium-transition {
+  transition-property: all;
+  transition-duration: 400ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@utility hover-lift {
+  transition-property: all;
+  transition-duration: 400ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.08);
+  }
+}
+
+@utility hover-tactile {
+  transition-property: transform, box-shadow;
+  transition-duration: 150ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  &:active {
+    transform: translateY(1px) scale(0.98);
+  }
+}
+
+/* ─── Base styles ─── */
+body {
+  background-color: var(--color-surface);
+  color: var(--color-text-main);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background-color: var(--color-primary-800);
+  color: #ffffff;
+}
+
+/* Hide scrollbar for clean UI but keep functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}

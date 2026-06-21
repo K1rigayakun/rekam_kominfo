@@ -1,0 +1,312 @@
+openapi: 3.1.0
+info:
+  title: REKAM API
+  version: 0.1.0
+  description: Backend API for REKAM local and on-premise deployment.
+servers:
+  - url: http://localhost:3000
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    AuthUser:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        full_name: { type: string }
+        role: { type: string, enum: [SUPER_ADMIN, EDITOR] }
+        district_id: { type: [string, "null"], format: uuid }
+        district_name: { type: [string, "null"] }
+        last_login_at: { type: [string, "null"], format: date-time }
+        last_upload_at: { type: [string, "null"], format: date-time }
+    ActivityInput:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+        description: { type: [string, "null"] }
+        description_json: { type: [object, "null"] }
+        event_date: { type: string, format: date }
+        event_end_date: { type: [string, "null"], format: date }
+        location: { type: [string, "null"] }
+        use_sections: { type: boolean }
+        team_id: { type: [string, "null"], format: uuid }
+        district_id: { type: [string, "null"], format: uuid }
+    Activity:
+      allOf:
+        - $ref: "#/components/schemas/ActivityInput"
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            district_name: { type: [string, "null"] }
+            team_name: { type: [string, "null"] }
+            created_by_name: { type: [string, "null"] }
+            is_archived: { type: boolean }
+            created_at: { type: string, format: date-time }
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        total_pages: { type: integer }
+paths:
+  /health:
+    get:
+      security: []
+      summary: Health check
+      responses:
+        "200":
+          description: Server status.
+  /api/auth/login:
+    post:
+      security: []
+      summary: Login and set HttpOnly refresh cookie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Access token and user profile.
+        "401":
+          description: Invalid credentials.
+  /api/auth/refresh:
+    post:
+      security: []
+      summary: Refresh access token from HttpOnly cookie
+      responses:
+        "200":
+          description: New access token.
+        "401":
+          description: Refresh token missing, invalid, expired, or revoked.
+  /api/auth/logout:
+    post:
+      summary: Revoke refresh token and clear cookie
+      responses:
+        "200":
+          description: Logout succeeded.
+  /api/auth/me:
+    get:
+      summary: Current user profile
+      responses:
+        "200":
+          description: Current user.
+  /api/activities:
+    get:
+      summary: List activities
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: team_id, in: query, schema: { type: string, format: uuid } }
+        - { name: district_id, in: query, schema: { type: string, format: uuid } }
+        - { name: archived, in: query, schema: { type: boolean } }
+        - { name: date_from, in: query, schema: { type: string, format: date } }
+        - { name: date_to, in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Paginated activities.
+    post:
+      summary: Create activity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivityInput"
+      responses:
+        "201":
+          description: Activity created.
+  /api/activities/{id}:
+    get:
+      summary: Activity detail with sections, media, and attachments
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Activity detail.
+    put:
+      summary: Update activity
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivityInput"
+      responses:
+        "200":
+          description: Activity updated.
+    delete:
+      summary: Archive or hard delete activity
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: hard, in: query, schema: { type: boolean }, description: SUPER_ADMIN only. }
+      responses:
+        "200":
+          description: Activity archived or deleted.
+  /api/activities/{id}/versions:
+    get:
+      summary: List activity versions
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Version list.
+  /api/activities/{id}/versions/{versionId}/restore:
+    post:
+      summary: Restore activity fields from a previous version
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Version restored.
+  /api/users:
+    get:
+      summary: List users
+      responses:
+        "200": { description: Users. }
+    post:
+      summary: Create user
+      responses:
+        "201": { description: User created. }
+  /api/users/{id}:
+    put:
+      summary: Update user
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: User updated. }
+  /api/users/{id}/reset-password:
+    put:
+      summary: Reset user password
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Password reset. }
+  /api/districts:
+    get:
+      summary: List districts
+      responses:
+        "200": { description: Districts. }
+    post:
+      summary: Create district
+      responses:
+        "201": { description: District created. }
+  /api/teams:
+    get:
+      summary: List teams
+      responses:
+        "200": { description: Teams. }
+    post:
+      summary: Create team
+      responses:
+        "201": { description: Team created. }
+  /api/media:
+    get:
+      summary: List media by activity or section
+      responses:
+        "200": { description: Media list. }
+  /api/media/upload:
+    post:
+      summary: Upload media files
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+      responses:
+        "201": { description: Media uploaded. }
+  /api/attachments/upload:
+    post:
+      summary: Upload event or section attachment
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+      responses:
+        "201": { description: Attachment uploaded. }
+  /api/sharing:
+    get:
+      summary: List sharing snapshots
+      responses:
+        "200": { description: Shares. }
+    post:
+      summary: Create QR sharing snapshot
+      responses:
+        "201": { description: Share created. }
+  /api/audit:
+    get:
+      summary: List audit logs
+      responses:
+        "200": { description: Audit logs. }
+  /api/audit/export/csv:
+    get:
+      summary: Export audit logs as CSV
+      responses:
+        "200": { description: CSV file. }
+  /api/export/activity/{id}/zip:
+    get:
+      summary: Export activity media as ZIP
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ZIP stream. }
+  /api/export/activity/{id}/pdf:
+    get:
+      summary: Export activity report as PDF
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: PDF stream. }
+  /p/{token}/info:
+    get:
+      security: []
+      summary: Public QR page metadata
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Public metadata. }
+  /p/{token}/media:
+    get:
+      security: []
+      summary: Public QR media list
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Public media. }
+  /p/{token}/download-all/zip:
+    get:
+      security: []
+      summary: Public ZIP download for selected snapshot content
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+        - { name: quality, in: query, schema: { type: string, enum: [preview, original] } }
+      responses:
+        "200": { description: ZIP stream. }
