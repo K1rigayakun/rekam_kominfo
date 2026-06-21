@@ -275,15 +275,15 @@ Bug berikut sudah ada di codebase dan **akan menyebabkan error atau kerusakan da
 
 ### Fase 2 — Fitur Wajib Kritis (Estimasi: 3–5 hari)
 
-| # | Task | Ref |
-| --- | --- | --- |
-| 7 | Implementasi quality selector dropdown di PublicViewer | B1 |
-| 8 | Implementasi HTTP Range Request untuk video streaming | B2 |
-| 9 | Tambahkan endpoint reactivate snapshot + tombol UI | B3 |
-| 10 | Tambahkan input label snapshot & mode deskripsi di ShareActivity | B4 |
-| 11 | Render badge "Belum diedit" di SortableMediaItem | B5 |
-| 12 | Tambahkan dialog konfirmasi "Hapus media atau pindahkan?" saat hapus seksi | B6 |
-| 13 | Tambahkan preset 480p di video worker | B13 |
+| # | Task | Ref | Status |
+| --- | --- | --- | --- |
+| 7 | Implementasi quality selector dropdown di PublicViewer | B1 | ~~Selesai~~ |
+| 8 | Implementasi HTTP Range Request untuk video streaming | B2 | ~~Selesai~~ |
+| 9 | Tambahkan endpoint reactivate snapshot + tombol UI | B3 | ~~Selesai~~ |
+| 10 | Tambahkan input label snapshot & mode deskripsi di ShareActivity | B4 | ~~Selesai~~ |
+| 11 | Render badge "Belum diedit" di SortableMediaItem | B5 | ~~Selesai~~ |
+| 12 | Tambahkan dialog konfirmasi "Hapus media atau pindahkan?" saat hapus seksi | B6 | ~~Selesai~~ |
+| 13 | Tambahkan preset 480p di video worker | B13 | ~~Selesai~~ |
 
 ### Fase 3 — Fitur Wajib Pendukung (Estimasi: 3–5 hari)
 
