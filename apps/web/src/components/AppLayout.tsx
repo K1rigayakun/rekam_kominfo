@@ -8,6 +8,8 @@ import {
   LogOut,
   Menu,
   X,
+  Tag,
+  Monitor,
 } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '../lib/api';
@@ -16,6 +18,7 @@ const navItems = [
   { to: '/', label: 'Acara', icon: Calendar, roles: ['SUPER_ADMIN', 'EDITOR'] },
   { to: '/users', label: 'Pengguna', icon: Users, roles: ['SUPER_ADMIN'] },
   { to: '/teams', label: 'Tim Liputan', icon: Building2, roles: ['SUPER_ADMIN'] },
+  { to: '/tags', label: 'Tag Event', icon: Tag, roles: ['SUPER_ADMIN'] },
   { to: '/districts', label: 'Kecamatan', icon: Building2, roles: ['SUPER_ADMIN'] },
   { to: '/audit', label: 'Audit Log', icon: Shield, roles: ['SUPER_ADMIN'] },
 ];
@@ -24,6 +27,12 @@ export default function AppLayout() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  const currentNavItems = [...navItems];
+  if (isTauri) {
+    currentNavItems.push({ to: '/offloader', label: 'Alat Desktop', icon: Monitor, roles: ['SUPER_ADMIN', 'EDITOR', 'PHOTOGRAPHER'] });
+  }
 
   const handleLogout = async () => {
     try {
@@ -36,7 +45,7 @@ export default function AppLayout() {
     }
   };
 
-  const filteredNav = navItems.filter((item) =>
+  const filteredNav = currentNavItems.filter((item) =>
     item.roles.includes(user?.role || '')
   );
 
@@ -58,12 +67,12 @@ export default function AppLayout() {
         ].join(' ')}
       >
         {/* Logo */}
-        <div className="h-16 flex items-center justify-between px-5 border-b border-gray-100">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg shadow-sm shadow-primary-500/20 overflow-hidden bg-white">
+        <div className="h-20 flex items-center justify-between px-5 border-b border-gray-100">
+          <div className="flex items-center gap-1">
+            <div className="w-10 h-10 rounded-lg shadow-sm shadow-primary-500/20 overflow-hidden bg-white">
               <img src="/icon.png" alt="Rekam" className="w-full h-full object-cover" />
             </div>
-            <img src="/logo.png" alt="REKAM" className="h-8 w-auto object-contain" />
+            <img src="/logo.png" alt="REKAM" className="h-14 w-auto object-contain -ml-2" />
           </div>
           <button
             className="lg:hidden p-1 text-gray-400 hover:text-gray-600"

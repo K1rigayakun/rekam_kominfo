@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { useAuthStore } from '../stores/authStore';
+import { getApiBase } from './desktop/store';
 
 function resolveApiUrl() {
   const configuredUrl = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL;
@@ -25,7 +26,16 @@ export const api = axios.create({
 
 // Interceptor untuk menyisipkan token secara otomatis ke setiap request
 api.interceptors.request.use(
-  (config) => {
+  async (config) => {
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      try {
+        const tauriApiBase = await getApiBase();
+        if (tauriApiBase) config.baseURL = tauriApiBase;
+      } catch (e) {
+        console.error('Failed to get Tauri API base', e);
+      }
+    }
+
     const token = useAuthStore.getState().token;
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;

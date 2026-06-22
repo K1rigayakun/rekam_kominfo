@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import PDFDocument from 'pdfkit';
+import { PassThrough } from 'stream';
 
 export async function exportRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
@@ -205,7 +206,8 @@ export async function exportRoutes(fastify: FastifyInstance) {
     reply.header('Content-Disposition', 'attachment; filename="REKAM_Audit_Report.pdf"');
 
     const doc = new PDFDocument({ margin: 50 });
-    doc.pipe(reply.raw);
+    const stream = new PassThrough();
+    doc.pipe(stream);
 
     // Header
     doc.fontSize(20).text('Laporan Audit Log REKAM', { align: 'center' });
@@ -242,7 +244,7 @@ export async function exportRoutes(fastify: FastifyInstance) {
     }
 
     doc.end();
-    return reply;
+    return reply.send(stream);
   });
 
   // ─── GET /api/export/audit/csv ─────────────

@@ -7,13 +7,13 @@ const createUserSchema = z.object({
   password: z.string().min(8, 'Password minimal 8 karakter'),
   full_name: z.string().min(1, 'Nama lengkap wajib diisi'),
   role: z.enum(['EDITOR', 'SUPER_ADMIN']).default('EDITOR'),
-  district_id: z.string().uuid().optional(),
+  district_id: z.string().optional().nullable().transform(v => (v === '' ? null : v)),
 });
 
 const updateUserSchema = z.object({
   full_name: z.string().min(1).optional(),
   role: z.enum(['EDITOR', 'SUPER_ADMIN']).optional(),
-  district_id: z.string().uuid().nullable().optional(),
+  district_id: z.string().optional().nullable().transform(v => (v === '' ? null : v)),
   is_active: z.boolean().optional(),
 });
 
@@ -233,6 +233,37 @@ export async function userRoutes(fastify: FastifyInstance) {
       );
 
       return reply.send({ message: `Password untuk ${rows[0].email} berhasil direset` });
+    }
+  );
+
+  // ─── DELETE /api/users/:id ────────────────
+  // Hapus pengguna oleh SUPER_ADMIN
+  fastify.delete<{ Params: { id: string } }>(
+    '/:id',
+    { preHandler: [fastify.requireSuperAdmin] },
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const { id } = request.params;
+      
+      const { rows } = await fastify.db.query('SELECT role, email FROM users WHERE id = $1', [id]);
+      
+      if (rows.length === 0) {
+        return reply.status(404).send({ error: 'User tidak ditemukan' });
+      }
+
+      if (rows[0].role === 'SUPER_ADMIN') {
+        return reply.status(403).send({ error: 'Tidak dapat menghapus SUPER_ADMIN' });
+      }
+
+      await fastify.db.query('DELETE FROM users WHERE id = $1', [id]);
+
+      // Log audit
+      await fastify.db.query(
+        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details, ip_address)
+         VALUES ($1, 'DELETE', 'user', $2, $3, $4)`,
+        [request.currentUser!.id, id, JSON.stringify({ action: 'delete_user', email: rows[0].email }), request.ip]
+      );
+
+      return reply.send({ message: 'User berhasil dihapus' });
     }
   );
 }

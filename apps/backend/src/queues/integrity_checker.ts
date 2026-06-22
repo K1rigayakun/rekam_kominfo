@@ -13,7 +13,9 @@ function requireEnv(name: string) {
   return value;
 }
 
-const redis = new Redis(requireEnv('REDIS_URL'));
+const redis = new Redis(requireEnv('REDIS_URL'), {
+  maxRetriesPerRequest: null,
+});
 
 const db = new Client({
   connectionString: requireEnv('DATABASE_URL'),

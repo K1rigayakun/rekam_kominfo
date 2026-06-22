@@ -2,6 +2,17 @@ import { load } from '@tauri-apps/plugin-store';
 import { invoke } from '@tauri-apps/api/core';
 
 let storeInstance: any = null;
+const configuredApiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL;
+
+export const DEFAULT_API_BASE = stripApiSuffix(configuredApiBase || 'http://localhost:3000');
+
+function stripApiSuffix(value: string) {
+  return value.trim().replace(/\/+$/, '').replace(/\/api$/i, '');
+}
+
+export function normalizeApiBase(apiBase: string) {
+  return stripApiSuffix(apiBase) || DEFAULT_API_BASE;
+}
 
 async function getStore() {
   if (!storeInstance) {
@@ -37,11 +48,12 @@ export async function clearToken() {
 
 export async function setApiBase(apiBase: string) {
   const store = await getStore();
-  await store.set('apiBase', apiBase.replace(/\/+$/, ''));
+  await store.set('apiBase', normalizeApiBase(apiBase));
   await store.save();
 }
 
 export async function getApiBase(): Promise<string> {
   const store = await getStore();
-  return (await store.get('apiBase')) || 'http://localhost:3000';
+  const saved = await store.get('apiBase');
+  return typeof saved === 'string' && saved.trim() ? normalizeApiBase(saved) : DEFAULT_API_BASE;
 }

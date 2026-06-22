@@ -12,6 +12,7 @@ const createActivitySchema = z.object({
   use_sections: z.boolean().default(true),
   team_id: z.string().uuid({ message: 'Format ID Tim tidak valid' }).optional(),
   district_id: z.string().uuid({ message: 'Format ID Kecamatan tidak valid' }).optional(),
+  tag_id: z.string().uuid().optional().nullable(),
 });
 
 const updateActivitySchema = z.object({
@@ -23,7 +24,9 @@ const updateActivitySchema = z.object({
   location: z.string().max(500).optional(),
   use_sections: z.boolean().optional(),
   is_archived: z.boolean().optional(),
+  team_id: z.string().uuid().nullable().optional(),
   district_id: z.string().uuid().nullable().optional(),
+  tag_id: z.string().uuid().nullable().optional(),
 });
 
 const listQuerySchema = z.object({
@@ -32,6 +35,7 @@ const listQuerySchema = z.object({
   search: z.string().optional(),
   team_id: z.string().uuid().optional(),
   district_id: z.string().uuid().optional(),
+  tag_id: z.string().uuid().optional(),
   archived: z.coerce.boolean().default(false),
   date_from: z.string().optional(),
   date_to: z.string().optional(),
@@ -107,6 +111,13 @@ export async function activityRoutes(fastify: FastifyInstance) {
       paramIndex++;
     }
 
+    // Filter berdasarkan tag
+    if (query.tag_id) {
+      whereClause += ` AND a.tag_id = $${paramIndex}`;
+      params.push(query.tag_id);
+      paramIndex++;
+    }
+
     if (user.role !== 'SUPER_ADMIN') {
       whereClause += ` AND ${activityAccessCondition('a', paramIndex, paramIndex + 1)}`;
       params.push(user.id, user.district_id);
@@ -168,14 +179,16 @@ export async function activityRoutes(fastify: FastifyInstance) {
 
     // Fetch data
     const { rows } = await fastify.db.query(
-      `SELECT a.*, t.name as team_name, u.full_name as created_by_name, d.name as district_name,
+      `SELECT a.*, t.name as team_name, u.full_name as created_by_name, d.name as district_name, tg.name as tag_name,
               (SELECT COUNT(*) FROM media_files mf WHERE mf.activity_id = a.id) as media_count,
               (SELECT COUNT(*) FROM media_files mf WHERE mf.activity_id = a.id AND mf.status = 'ERROR' AND mf.processing_error = 'COMPROMISED') as compromised_count,
-              (SELECT COUNT(*) FROM event_sections es WHERE es.activity_id = a.id) as section_count
+              (SELECT COUNT(*) FROM event_sections es WHERE es.activity_id = a.id) as section_count,
+              (SELECT id FROM media_files mf WHERE mf.activity_id = a.id AND mf.storage_key_thumbnail IS NOT NULL ORDER BY mf.created_at ASC LIMIT 1) as thumbnail_media_id
        FROM activities a
        LEFT JOIN teams t ON t.id = a.team_id
        LEFT JOIN users u ON u.id = a.created_by
        LEFT JOIN districts d ON d.id = a.district_id
+       LEFT JOIN tags tg ON tg.id = a.tag_id
        ${whereClause}
        ${orderBy}
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -199,11 +212,12 @@ export async function activityRoutes(fastify: FastifyInstance) {
     const user = request.currentUser!;
 
     const { rows } = await fastify.db.query(
-      `SELECT a.*, t.name as team_name, u.full_name as created_by_name, d.name as district_name
+      `SELECT a.*, t.name as team_name, u.full_name as created_by_name, d.name as district_name, tg.name as tag_name
        FROM activities a
        LEFT JOIN teams t ON t.id = a.team_id
        LEFT JOIN users u ON u.id = a.created_by
        LEFT JOIN districts d ON d.id = a.district_id
+       LEFT JOIN tags tg ON tg.id = a.tag_id
        WHERE a.id = $1`,
       [id]
     );
@@ -278,19 +292,20 @@ export async function activityRoutes(fastify: FastifyInstance) {
       }
 
       const { rows } = await fastify.db.query(
-        `INSERT INTO activities (title, description, description_json, event_date, event_end_date, location, use_sections, team_id, district_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `INSERT INTO activities (title, description, description_json, event_date, event_end_date, location, use_sections, team_id, district_id, tag_id, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING *`,
         [
           body.title,
           body.description || null,
           body.description_json ? JSON.stringify(body.description_json) : null,
-          body.event_date || new Date().toISOString().split('T')[0],
+          body.event_date || null,
           body.event_end_date || null,
           body.location || null,
           body.use_sections,
           teamId,
           districtId,
+          body.tag_id || null,
           user.id,
         ]
       );

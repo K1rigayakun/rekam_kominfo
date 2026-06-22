@@ -13,8 +13,8 @@
     "db:reset": "tsx src/migrations/reset.ts",
     "db:check": "tsx src/migrations/check.ts",
     "queue:media": "tsx src/queues/media_processor.ts",
-    "queue:integrity": "tsx src/queues/integrity_checker.ts",
-    "queue:export": "tsx src/queues/export_processor.ts"
+    "queue:export": "tsx src/queues/export_processor.ts",
+    "queue:integrity": "tsx src/queues/integrity_checker.ts"
   },
   "dependencies": {
     "@bull-board/api": "^6.6.0",

@@ -105,7 +105,7 @@ export default function ProfilePage() {
           
           <form onSubmit={handleUpdateProfile} className="space-y-4">
             <div>
-              <label className="text-xs font-bold text-gray-500 mb-1.5 block tracking-wider uppercase">Email / Username</label>
+              <label className="text-xs font-bold text-gray-500 mb-1.5 block tracking-wider uppercase">Email</label>
               <input
                 type="text"
                 disabled

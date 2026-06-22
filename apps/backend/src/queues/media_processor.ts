@@ -18,7 +18,9 @@ function requireEnv(name: string) {
   return value;
 }
 
-const redis = new Redis(requireEnv('REDIS_URL'));
+const redis = new Redis(requireEnv('REDIS_URL'), {
+  maxRetriesPerRequest: null,
+});
 
 const db = new Client({
   connectionString: requireEnv('DATABASE_URL'),
@@ -46,7 +48,11 @@ if (process.env.FFPROBE_PATH) {
   ffmpeg.setFfprobePath(process.env.FFPROBE_PATH);
 }
 
-async function processImage(mediaId: string, storageKeyRaw: string, activityId: string, sectionId: string) {
+function storageSection(sectionId: string | null | undefined) {
+  return sectionId || 'unsectioned';
+}
+
+async function processImage(mediaId: string, storageKeyRaw: string, activityId: string, sectionId: string | null) {
   const tmpRawPath = path.join(os.tmpdir(), `raw_${mediaId}`);
   await minio.fGetObject(RAW_BUCKET, storageKeyRaw, tmpRawPath);
 
@@ -58,7 +64,8 @@ async function processImage(mediaId: string, storageKeyRaw: string, activityId: 
   const uuid = randomUUID();
 
   // Buat preview (kompresi) - WEBP 1080p
-  const processedKey = `${activityId}/${sectionId}/${uuid}_preview.webp`;
+  const sectionPath = storageSection(sectionId);
+  const processedKey = `${activityId}/${sectionPath}/${uuid}_preview.webp`;
   const tmpProcessedPath = path.join(os.tmpdir(), `proc_${mediaId}.webp`);
 
   await sharp(tmpRawPath)
@@ -67,7 +74,7 @@ async function processImage(mediaId: string, storageKeyRaw: string, activityId: 
     .toFile(tmpProcessedPath);
 
   // Buat thumbnail - WEBP 400x400
-  const thumbnailKey = `${activityId}/${sectionId}/${uuid}_thumb.webp`;
+  const thumbnailKey = `${activityId}/${sectionPath}/${uuid}_thumb.webp`;
   const tmpThumbPath = path.join(os.tmpdir(), `thumb_${mediaId}.webp`);
 
   await sharp(tmpRawPath)
@@ -123,16 +130,17 @@ const transcodeVideo = (inputPath: string, outputPath: string, resolution: strin
   });
 };
 
-async function processVideo(mediaId: string, storageKeyRaw: string, activityId: string, sectionId: string) {
+async function processVideo(mediaId: string, storageKeyRaw: string, activityId: string, sectionId: string | null) {
   const tmpRawPath = path.join(os.tmpdir(), `raw_${mediaId}`);
   await minio.fGetObject(RAW_BUCKET, storageKeyRaw, tmpRawPath);
 
   const uuid = randomUUID();
+  const sectionPath = storageSection(sectionId);
   
   // Create thumbnail (WebP 400x400)
   const tmpThumbPath = path.join(os.tmpdir(), `thumb_${mediaId}.jpg`);
   const finalThumbPath = path.join(os.tmpdir(), `thumb_${mediaId}.webp`);
-  const finalThumbKey = `${activityId}/${sectionId}/${uuid}_thumb.webp`;
+  const finalThumbKey = `${activityId}/${sectionPath}/${uuid}_thumb.webp`;
 
   let defaultProcessedKey = '';
   const qualityVariants: Record<string, string> = {};
@@ -201,7 +209,7 @@ async function processVideo(mediaId: string, storageKeyRaw: string, activityId: 
             // 3. Transcoding to multiple resolutions
             for (const res of resolutions) {
               const outPath = path.join(os.tmpdir(), `${mediaId}_${res.label}.mp4`);
-              const outKey = `${activityId}/${sectionId}/${uuid}_${res.label}.mp4`;
+              const outKey = `${activityId}/${sectionPath}/${uuid}_${res.label}.mp4`;
               console.log(`[Worker] Transcoding video ${mediaId} to ${res.label}... (Source height: ${sourceHeight})`);
               
               await transcodeVideo(tmpRawPath, outPath, res.height.toString());
@@ -254,37 +262,45 @@ async function processVideo(mediaId: string, storageKeyRaw: string, activityId: 
   });
 }
 
-const worker = new Worker(
-  'media-processing',
-  async (job) => {
-    const { mediaId, mediaType, storageKeyRaw, activityId, sectionId } = job.data;
-    console.log(`[Worker] Processing media ${mediaId} (${mediaType})`);
+async function start() {
+  await db.connect();
+  console.log('[media_processor] Terhubung ke database');
 
-    try {
-      if (mediaType === 'IMAGE') {
-        await processImage(mediaId, storageKeyRaw, activityId, sectionId);
-      } else if (mediaType === 'VIDEO') {
-        await processVideo(mediaId, storageKeyRaw, activityId, sectionId);
+  const worker = new Worker(
+    'media-processing',
+    async (job) => {
+      const { mediaId, mediaType, storageKeyRaw, activityId, sectionId } = job.data;
+      console.log(`[Worker] Processing media ${mediaId} (${mediaType})`);
+
+      try {
+        if (mediaType === 'IMAGE') {
+          await processImage(mediaId, storageKeyRaw, activityId, sectionId);
+        } else if (mediaType === 'VIDEO') {
+          await processVideo(mediaId, storageKeyRaw, activityId, sectionId);
+        }
+        console.log(`[Worker] Finished media ${mediaId}`);
+      } catch (err: any) {
+        console.error(`[Worker] Error processing media ${mediaId}:`, err);
+        await db.query(`UPDATE media_files SET status = 'ERROR' WHERE id = $1`, [mediaId]);
+        throw err;
       }
-      console.log(`[Worker] Finished media ${mediaId}`);
-    } catch (err: any) {
-      console.error(`[Worker] Error processing media ${mediaId}:`, err);
-      await db.query(`UPDATE media_files SET status = 'ERROR' WHERE id = $1`, [mediaId]);
-      throw err;
+    },
+    { 
+      connection: redis as any,
+      concurrency: Number(process.env.MEDIA_PROCESSING_CONCURRENCY || 2)
     }
-  },
-  { 
-    connection: redis as any,
-    concurrency: Number(process.env.MEDIA_PROCESSING_CONCURRENCY || 2)
-  }
-);
+  );
 
-worker.on('ready', () => {
-  console.log('[Worker] Media processing worker started and listening...');
-});
+  worker.on('ready', () => {
+    console.log('[Worker] Media processing worker started and listening...');
+  });
 
-// Setup DB connection
-db.connect().catch((err) => {
-  console.error('[Worker] Failed to connect to DB', err);
+  worker.on('failed', (job, err) => {
+    console.error(`[Worker] Media job ${job?.id} failed in BullMQ:`, err);
+  });
+}
+
+start().catch((err) => {
+  console.error('[Worker] Failed to start media processor', err);
   process.exit(1);
 });

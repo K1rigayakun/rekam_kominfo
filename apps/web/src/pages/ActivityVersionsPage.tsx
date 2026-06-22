@@ -102,6 +102,13 @@ export default function ActivityVersionsPage() {
                         {v.created_by_name || 'Sistem'}
                       </div>
                     </div>
+                    {v.snapshot && (
+                      <div className="mt-3 bg-white border border-zinc-200 rounded-lg p-3 text-xs text-zinc-600 space-y-1">
+                        <p><span className="font-semibold text-zinc-800">Judul:</span> {v.snapshot.title || '-'}</p>
+                        <p><span className="font-semibold text-zinc-800">Lokasi:</span> {v.snapshot.location || '-'}</p>
+                        <p><span className="font-semibold text-zinc-800">Seksi:</span> {v.snapshot.use_sections && v.snapshot.sections ? v.snapshot.sections.length + ' Seksi' : 'Tidak menggunakan seksi'}</p>
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-col items-end gap-2">
                     {i === 0 ? (

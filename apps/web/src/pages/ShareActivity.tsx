@@ -2,7 +2,7 @@
 import { toast } from 'sonner';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, API_URL } from '../lib/api';
 import { AxiosError } from 'axios';
 import {
   ArrowLeft, Share2, Loader2, Copy, X, Trash2, Eye, Link as LinkIcon, BarChart2, Download, CheckCircle
@@ -46,6 +46,7 @@ export default function ShareActivityPage() {
     download_quality: 'BOTH',
     expires_at: '',
     share_attachments: true,
+    allow_upload: false,
     description_mode: 'AUTO',
     custom_description: '',
   });
@@ -131,13 +132,13 @@ export default function ShareActivityPage() {
         });
         Object.values(sectionMedia).flat().forEach((m) => {
           if (selectedShareMedia.has(m.id)) {
-            items.push({ media_id: m.id, sort_order: sortOrder++ });
+            items.push({ section_id: m.section_id, media_id: m.id, sort_order: sortOrder++ });
           }
         });
       } else if (activity?.unsectioned_media) {
         activity.unsectioned_media.forEach((m) => {
           if (selectedShareMedia.has(m.id)) {
-            items.push({ media_id: m.id, sort_order: sortOrder++ });
+            items.push({ section_id: m.section_id, media_id: m.id, sort_order: sortOrder++ });
           }
         });
       }
@@ -156,6 +157,7 @@ export default function ShareActivityPage() {
         items,
         config: {
           share_attachments: shareConfig.share_attachments,
+          allow_upload: shareConfig.allow_upload,
           allowed_attachment_ids: Array.from(selectedShareAttachments),
           description_mode: shareConfig.description_mode,
           custom_description: shareConfig.custom_description,
@@ -229,6 +231,7 @@ export default function ShareActivityPage() {
       download_quality: shareConfig.download_quality,
       config: {
         share_attachments: shareConfig.share_attachments,
+        allow_upload: shareConfig.allow_upload,
         description_mode: shareConfig.description_mode,
         custom_description: shareConfig.custom_description,
       },
@@ -374,6 +377,19 @@ export default function ShareActivityPage() {
                     </div>
                   </label>
 
+                  <label className="flex items-center gap-3 mb-4 p-3 bg-gray-50 border border-gray-200 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={shareConfig.allow_upload}
+                      onChange={(e) => setShareConfig({ ...shareConfig, allow_upload: e.target.checked })}
+                      className="w-5 h-5 text-primary-600 rounded"
+                    />
+                    <div>
+                      <span className="text-sm font-semibold text-gray-900 block">Izinkan Upload dari QR</span>
+                      <span className="text-xs text-gray-500 block">Pengunjung dapat mengirim foto/video ke acara ini</span>
+                    </div>
+                  </label>
+
                   {shareConfig.share_attachments && attachments.length > 0 && (
                     <div className="mb-4 pl-8 border-l-2 border-primary-100 ml-2 space-y-2">
                       {attachments.map(att => (
@@ -423,7 +439,7 @@ export default function ShareActivityPage() {
                           </label>
                           <div className="pl-6 grid grid-cols-1 sm:grid-cols-2 gap-2">
                             {sectionMedia[section.id]?.map(media => (
-                              <label key={media.id} className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer p-1 hover:bg-gray-100 rounded">
+                              <label key={media.id} className="flex items-center gap-3 text-sm text-gray-600 cursor-pointer p-2 hover:bg-gray-100 rounded-xl transition-colors">
                                 <input 
                                   type="checkbox" 
                                   checked={selectedShareMedia.has(media.id)}
@@ -433,9 +449,23 @@ export default function ShareActivityPage() {
                                     else next.delete(media.id);
                                     setSelectedShareMedia(next);
                                   }}
-                                  className="w-3.5 h-3.5 text-primary-500 rounded"
+                                  className="w-4 h-4 text-primary-600 rounded"
                                 />
-                                <span className="truncate">{media.display_name}</span>
+                                <div className="w-10 h-10 rounded-lg overflow-hidden bg-gray-200 shrink-0">
+                                  {media.media_type === 'IMAGE' ? (
+                                    <img 
+                                      src={`${API_URL}/api/media/${media.id}/download?quality=preview&inline=true&token=${useAuthStore.getState().token}`}
+                                      className="w-full h-full object-cover"
+                                      alt={media.display_name}
+                                    />
+                                  ) : (
+                                    <video 
+                                      src={`${API_URL}/api/media/${media.id}/download?quality=preview&inline=true&token=${useAuthStore.getState().token}`}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  )}
+                                </div>
+                                <span className="truncate flex-1 font-medium text-gray-800">{media.display_name || media.original_filename}</span>
                               </label>
                             ))}
                           </div>
@@ -444,7 +474,7 @@ export default function ShareActivityPage() {
                     ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {activity?.unsectioned_media.map(media => (
-                          <label key={media.id} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer p-1 hover:bg-gray-100 rounded">
+                          <label key={media.id} className="flex items-center gap-3 text-sm text-gray-600 cursor-pointer p-2 hover:bg-gray-100 rounded-xl transition-colors">
                             <input 
                               type="checkbox" 
                               checked={selectedShareMedia.has(media.id)}
@@ -456,7 +486,21 @@ export default function ShareActivityPage() {
                               }}
                               className="w-4 h-4 text-primary-600 rounded"
                             />
-                            <span className="truncate">{media.display_name}</span>
+                            <div className="w-10 h-10 rounded-lg overflow-hidden bg-gray-200 shrink-0">
+                              {media.media_type === 'IMAGE' ? (
+                                <img 
+                                  src={`${API_URL}/api/media/${media.id}/download?quality=preview&inline=true&token=${useAuthStore.getState().token}`}
+                                  className="w-full h-full object-cover"
+                                  alt={media.display_name}
+                                />
+                              ) : (
+                                <video 
+                                  src={`${API_URL}/api/media/${media.id}/download?quality=preview&inline=true&token=${useAuthStore.getState().token}`}
+                                  className="w-full h-full object-cover"
+                                />
+                              )}
+                            </div>
+                            <span className="truncate flex-1 font-medium text-gray-800">{media.display_name || media.original_filename}</span>
                           </label>
                         ))}
                       </div>
@@ -630,7 +674,7 @@ export default function ShareActivityPage() {
                     <div className="flex gap-2 mt-2">
                       <button 
                         onClick={() => {
-                          const url = `${window.location.origin}/p/${share.token}`;
+                          const url = `${window.location.origin}/share/${share.token}`;
                           window.open(url, '_blank');
                         }}
                         className="flex-1 py-2 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg text-xs font-semibold text-gray-700 transition-colors flex items-center justify-center gap-1.5"
@@ -639,7 +683,7 @@ export default function ShareActivityPage() {
                       </button>
                       <button 
                         onClick={() => {
-                          const url = `${window.location.origin}/p/${share.token}`;
+                          const url = `${window.location.origin}/share/${share.token}`;
                           copyToClipboard(url);
                         }}
                         className="py-2 px-3 bg-primary-50 hover:bg-primary-100 border border-primary-100 rounded-lg text-primary-700 transition-colors"

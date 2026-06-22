@@ -1,17 +1,19 @@
 import React, { useEffect, useState, useRef } from "react";
-import { Users, Plus, Pencil, Loader2, Shield, Key, Search } from "lucide-react";
+import { Users, Plus, Pencil, Loader2, Shield, Key, Search, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { animate, stagger } from "animejs";
 import { api } from "../lib/api";
 import { useAuthStore } from "../stores/authStore";
 import { toast } from "sonner";
 import { usePrompt } from "../components/usePrompt";
+import { useConfirm } from "../components/useConfirm";
 import { AnimatedText } from "../components/AnimatedText";
 import { MagneticButton } from "../components/MagneticButton";
 
 export default function UsersPage() {
   const { user } = useAuthStore();
   const prompt = usePrompt();
+  const { confirm } = useConfirm();
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -22,7 +24,7 @@ export default function UsersPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
-    username: "",
+    email: "",
     full_name: "",
     password: "",
     role: "EDITOR",
@@ -70,8 +72,8 @@ export default function UsersPage() {
   }, []);
 
   const filteredUsers = users.filter((u) => 
-    u.full_name.toLowerCase().includes(search.toLowerCase()) ||
-    u.username.toLowerCase().includes(search.toLowerCase())
+    (u.full_name || "").toLowerCase().includes(search.toLowerCase()) ||
+    (u.email || "").toLowerCase().includes(search.toLowerCase())
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -88,7 +90,7 @@ export default function UsersPage() {
         toast.success("Pengguna berhasil diperbarui");
       } else {
         const payload: any = {
-          username: formData.username,
+          email: formData.email,
           full_name: formData.full_name,
           password: formData.password,
           role: formData.role,
@@ -125,10 +127,31 @@ export default function UsersPage() {
     }
   };
 
+  const handleDeleteUser = async (u: any) => {
+    if (u.role === "SUPER_ADMIN") return;
+    const isConfirmed = await confirm({
+      title: "Hapus Pengguna",
+      message: `Apakah Anda yakin ingin menghapus pengguna ${u.full_name}? Tindakan ini tidak dapat dibatalkan.`,
+      confirmText: "Hapus",
+      cancelText: "Batal",
+      isDestructive: true
+    });
+    
+    if (isConfirmed) {
+      try {
+        await api.delete(`/api/users/${u.id}`);
+        toast.success("Pengguna berhasil dihapus");
+        fetchUsers();
+      } catch (err: any) {
+        toast.error(err.response?.data?.error || "Gagal menghapus pengguna");
+      }
+    }
+  };
+
   const openCreate = () => {
     setEditingId(null);
     setFormData({
-      username: "",
+      email: "",
       full_name: "",
       password: "",
       role: "EDITOR",
@@ -140,7 +163,7 @@ export default function UsersPage() {
   const openEdit = (u: any) => {
     setEditingId(u.id);
     setFormData({
-      username: u.username,
+      email: u.email,
       full_name: u.full_name,
       password: "",
       role: u.role,
@@ -206,7 +229,7 @@ export default function UsersPage() {
           <table ref={tableRef} className="w-full text-left text-sm text-gray-600">
             <thead className="bg-gray-50/50 text-gray-500 border-b border-gray-100">
               <tr>
-                <th className="px-6 py-4 font-semibold rounded-tl-xl">Nama Lengkap & Username</th>
+                <th className="px-6 py-4 font-semibold rounded-tl-xl">Nama Lengkap & Email</th>
                 <th className="px-6 py-4 font-semibold">Role</th>
                 <th className="px-6 py-4 font-semibold">Kecamatan</th>
                 <th className="px-6 py-4 font-semibold">Status</th>
@@ -222,7 +245,7 @@ export default function UsersPage() {
                 >
                   <td className="px-6 py-4">
                       <div className="font-semibold text-gray-900">{u.full_name}</div>
-                      <div className="text-xs text-text-muted">@{u.username}</div>
+                      <div className="text-xs text-text-muted">{u.email}</div>
                     </td>
                     <td className="px-5 py-4">
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold ${u.role === "SUPER_ADMIN" ? "bg-red-100 text-red-700" : u.role === "EDITOR" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}>
@@ -248,6 +271,11 @@ export default function UsersPage() {
                           <button onClick={() => openEdit(u)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit Pengguna">
                             <Pencil className="w-4 h-4" />
                           </button>
+                          {u.role !== "SUPER_ADMIN" && (
+                            <button onClick={() => handleDeleteUser(u)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Hapus Pengguna">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       )}
                     </td>
@@ -274,14 +302,14 @@ export default function UsersPage() {
               {!editingId && (
                 <div>
                   <label className="text-sm font-semibold text-gray-700 mb-1.5 block">
-                    Username
+                    Email
                   </label>
                   <input
-                    type="text"
+                    type="email"
                     required
-                    value={formData.username}
+                    value={formData.email}
                     onChange={(e) =>
-                      setFormData({ ...formData, username: e.target.value })
+                      setFormData({ ...formData, email: e.target.value })
                     }
                     className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500/20 outline-none"
                   />

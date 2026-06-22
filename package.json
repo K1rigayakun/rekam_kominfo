@@ -10,6 +10,7 @@
     "dev:backend": "npm --prefix apps/backend run dev",
     "dev:web": "npm --prefix apps/web run dev -- --host 0.0.0.0",
     "dev:desktop": "npm --prefix apps/desktop run tauri:dev",
+    "share:online": "ssh -p 443 -R0:localhost:5173 -o StrictHostKeyChecking=no a.pinggy.io",
     "db:migrate": "npm --prefix apps/backend run db:migrate",
     "db:seed": "npm --prefix apps/backend run db:seed",
     "db:check": "npm --prefix apps/backend run db:check",

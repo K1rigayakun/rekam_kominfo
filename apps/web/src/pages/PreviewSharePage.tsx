@@ -41,11 +41,11 @@ export default function PreviewSharePage() {
       </div>
 
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-gray-100 h-16 flex items-center px-4 lg:px-8 justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <div className="w-8 h-8 rounded-lg overflow-hidden bg-white shadow-sm flex items-center justify-center">
             <img src="/icon.png" alt="Rekam" className="w-full h-full object-cover" />
           </div>
-          <img src="/logo.png" alt="REKAM" className="h-8 w-auto object-contain" />
+          <img src="/logo.png" alt="REKAM" className="h-16 w-auto object-contain -ml-2" />
         </div>
       </header>
 

@@ -7,32 +7,35 @@ export interface UploadQueueItem {
   file_path: string;
   file_name: string;
   file_size: number;
-  status: 'PENDING' | 'UPLOADING' | 'DONE' | 'ERROR';
+  status: 'PENDING' | 'UPLOADING' | 'DONE' | 'ERROR' | 'PAUSED';
   progress_bytes: number;
   created_at: number;
 }
 
-let dbInstance: Database | null = null;
+let initPromise: Promise<Database> | null = null;
 
-export const initDB = async () => {
-  if (dbInstance) return dbInstance;
-  dbInstance = await Database.load('sqlite:rekam_queue.db');
+export const initDB = async (): Promise<Database> => {
+  if (initPromise) return initPromise;
   
-  await dbInstance.execute(`
-    CREATE TABLE IF NOT EXISTS upload_queue (
-      id TEXT PRIMARY KEY,
-      activity_id TEXT NOT NULL,
-      section_id TEXT,
-      file_path TEXT NOT NULL,
-      file_name TEXT NOT NULL,
-      file_size INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'PENDING',
-      progress_bytes INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL
-    )
-  `);
+  initPromise = (async () => {
+    const db = await Database.load('sqlite:rekam_queue.db');
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS upload_queue (
+        id TEXT PRIMARY KEY,
+        activity_id TEXT NOT NULL,
+        section_id TEXT,
+        file_path TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        progress_bytes INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    return db;
+  })();
   
-  return dbInstance;
+  return initPromise;
 };
 
 export const enqueueFile = async (item: Omit<UploadQueueItem, 'status' | 'progress_bytes' | 'created_at'>) => {
@@ -61,6 +64,11 @@ export const updateQueueStatus = async (id: string, status: UploadQueueItem['sta
   } else {
     await db.execute('UPDATE upload_queue SET status = $1 WHERE id = $2', [status, id]);
   }
+};
+
+export const deleteFromQueue = async (id: string) => {
+  const db = await initDB();
+  await db.execute('DELETE FROM upload_queue WHERE id = $1', [id]);
 };
 
 export const deleteQueueItem = async (id: string) => {

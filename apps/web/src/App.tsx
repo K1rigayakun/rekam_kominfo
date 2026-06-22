@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { lazy, Suspense } from 'react';
+import { Component, lazy, Suspense, type ReactNode } from 'react';
 import { useAuthStore } from './stores/authStore';
 import AppLayout from './components/AppLayout';
 import { Toaster } from 'sonner';
@@ -13,10 +13,13 @@ const PreviewSharePage = lazy(() => import('./pages/PreviewSharePage'));
 const ShareActivityPage = lazy(() => import('./pages/ShareActivity'));
 const UsersPage = lazy(() => import('./pages/UsersPage'));
 const TeamsPage = lazy(() => import('./pages/TeamsPage'));
+const TeamDetailPage = lazy(() => import('./pages/TeamDetailPage'));
+const TagsPage = lazy(() => import('./pages/TagsPage'));
 const DistrictsPage = lazy(() => import('./pages/DistrictsPage'));
 const AuditPage = lazy(() => import('./pages/AuditPage'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));
 const ActivityVersionsPage = lazy(() => import('./pages/ActivityVersionsPage'));
+const DesktopOffloaderPage = lazy(() => import('./pages/DesktopOffloader'));
 
 function RouteFallback() {
   return (
@@ -24,6 +27,42 @@ function RouteFallback() {
       Memuat halaman...
     </div>
   );
+}
+
+class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
+  state = { hasError: false, message: '' };
+
+  static getDerivedStateFromError(error: unknown) {
+    return {
+      hasError: true,
+      message: error instanceof Error ? error.message : 'Terjadi kesalahan pada halaman.',
+    };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('REKAM page error:', error);
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+
+    return (
+      <div className="min-h-[70dvh] flex items-center justify-center px-4">
+        <div className="w-full max-w-md rounded-2xl border border-red-100 bg-white p-6 shadow-lg">
+          <p className="text-sm font-semibold text-red-600 mb-2">Halaman gagal dimuat</p>
+          <h1 className="text-xl font-bold text-zinc-900 mb-3">REKAM mendeteksi error tampilan.</h1>
+          <p className="text-sm text-zinc-500 mb-5 break-words">{this.state.message}</p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="w-full rounded-xl bg-primary-600 px-4 py-3 text-sm font-semibold text-white hover:bg-primary-700 transition-colors"
+          >
+            Muat Ulang
+          </button>
+        </div>
+      </div>
+    );
+  }
 }
 
 // Komponen untuk melindungi rute yang butuh autentikasi
@@ -58,10 +97,12 @@ function App() {
       />
       <InteractiveBackground />
       <BrowserRouter>
+        <AppErrorBoundary>
         <Suspense fallback={<RouteFallback />}>
         <Routes>
         {/* Route publik */}
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/share/:token" element={<PublicViewerPage />} />
         <Route path="/p/:token" element={<PublicViewerPage />} />
         <Route path="/preview" element={
           <ProtectedRoute>
@@ -83,15 +124,19 @@ function App() {
           <Route path="/activity/:id/sharing" element={<ShareActivityPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/teams" element={<TeamsPage />} />
+          <Route path="/teams/:id" element={<TeamDetailPage />} />
+          <Route path="/tags" element={<TagsPage />} />
           <Route path="/districts" element={<DistrictsPage />} />
           <Route path="/audit" element={<AuditPage />} />
           <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/offloader" element={<DesktopOffloaderPage />} />
         </Route>
         
         {/* Route fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       </Suspense>
+      </AppErrorBoundary>
     </BrowserRouter>
     </>
   );

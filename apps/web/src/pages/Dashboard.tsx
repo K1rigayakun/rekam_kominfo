@@ -1,22 +1,23 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, API_URL } from '../lib/api';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   CalendarBlank, Plus, MagnifyingGlass, Image as ImageIcon, MapPin, 
-  CaretLeft, CaretRight, SpinnerGap, X, SquaresFour, List, Archive, Warning, Trash
+  CaretLeft, CaretRight, SpinnerGap, SquaresFour, List, Archive, Warning, Trash
 } from '@phosphor-icons/react';
 import DateFilterPopover from '../components/DateFilterPopover';
 import { useAuthStore } from '../stores/authStore';
 import { useConfirm } from '../components/useConfirm';
+import MasterActivityModal from '../components/ActivityEditor/MasterActivityModal';
 
 interface Team {
   id: string;
   name: string;
 }
 
-interface District {
+interface Tag {
   id: string;
   name: string;
 }
@@ -28,17 +29,19 @@ interface Activity {
   location: string;
   team_name: string;
   district_name?: string | null;
+  tag_name?: string | null;
   media_count: number;
   compromised_count: number;
   section_count: number;
   is_archived: boolean;
   created_by_name: string;
   created_at?: string | null;
+  thumbnail_media_id?: string | null;
 }
 
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const { user } = useAuthStore();
+  const { user, token } = useAuthStore();
   const { confirm, ConfirmDialog } = useConfirm();
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,22 +52,17 @@ export default function DashboardPage() {
   const [filterMonth, setFilterMonth] = useState('');
   const [filterYear, setFilterYear] = useState('');
   const [filterTeamId, setFilterTeamId] = useState('');
-  const [filterDistrictId, setFilterDistrictId] = useState('');
+  const [filterTagId, setFilterTagId] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-
-  // Form state
-  const [newTitle, setNewTitle] = useState('');
-  const [newDate, setNewDate] = useState(new Date().toISOString().split('T')[0]);
-  const [newLocation, setNewLocation] = useState('');
-  const [newTeamId, setNewTeamId] = useState('');
-  const [newDistrictId, setNewDistrictId] = useState(user?.district_id || '');
   const [teams, setTeams] = useState<Team[]>([]);
-  const [districts, setDistricts] = useState<District[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [creating, setCreating] = useState(false);
+  const [modalActivityId, setModalActivityId] = useState<string | null>(null);
+  const [isNewDraft, setIsNewDraft] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   async function fetchTeams() {
     try {
@@ -75,12 +73,12 @@ export default function DashboardPage() {
     }
   }
 
-  async function fetchDistricts() {
+  async function fetchTags() {
     try {
-      const res = await api.get('/api/districts');
-      setDistricts(res.data.data);
+      const res = await api.get('/api/tags');
+      setTags(res.data.data);
     } catch (err) {
-      console.error('Gagal memuat kecamatan:', err);
+      console.error('Gagal memuat tags:', err);
     }
   }
 
@@ -98,7 +96,7 @@ export default function DashboardPage() {
       if (filterMonth) params.set('filter_month', filterMonth);
       if (filterYear) params.set('filter_year', filterYear);
       if (filterTeamId) params.set('team_id', filterTeamId);
-      if (filterDistrictId) params.set('district_id', filterDistrictId);
+      if (filterTagId) params.set('tag_id', filterTagId);
       if (showArchived) params.set('archived', 'true');
       const res = await api.get(`/api/activities?${params}`);
       setActivities(res.data.data);
@@ -113,37 +111,23 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchActivities();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, dateFrom, dateTo, filterDay, filterMonth, filterYear, filterTeamId, filterDistrictId, showArchived]);
+  }, [page, search, dateFrom, dateTo, filterDay, filterMonth, filterYear, filterTeamId, filterTagId, showArchived]);
 
   useEffect(() => {
     fetchTeams();
-    fetchDistricts();
+    fetchTags();
   }, []);
 
-  useEffect(() => {
-    if (!newDistrictId && user?.district_id) {
-      setNewDistrictId(user.district_id);
-    }
-  }, [newDistrictId, user?.district_id]);
-
-  const handleCreateActivity = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreateActivityFast = async () => {
     setCreating(true);
     try {
       const res = await api.post('/api/activities', {
-        title: newTitle,
-        event_date: newDate,
-        location: newLocation || undefined,
-        team_id: newTeamId || undefined,
-        district_id: newDistrictId || undefined,
+        title: `Draft Acara ${new Date().toLocaleDateString('id-ID')}`,
+        event_date: new Date().toISOString().split('T')[0],
       });
-      setShowCreateModal(false);
-      setNewTitle('');
-      setNewLocation('');
-      setNewTeamId('');
-      setNewDistrictId(user?.district_id || '');
-      toast.success('Acara berhasil dibuat');
-      navigate(`/activity/${res.data.data.id}`);
+      setModalActivityId(res.data.data.id);
+      setIsNewDraft(true);
+      setIsModalOpen(true);
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Gagal membuat acara');
     } finally {
@@ -213,14 +197,15 @@ export default function DashboardPage() {
             <h1 className="text-3xl font-bold text-zinc-900 tracking-tight">Acara & Kegiatan</h1>
           </div>
           <p className="text-zinc-500 text-sm max-w-[40ch]">
-            Kelola dokumentasi foto, video, lampiran, dan arsip kegiatan Kominfo per kecamatan.
+            Kelola dokumentasi foto, video, lampiran, dan arsip kegiatan Kominfo.
           </p>
         </div>
         <button
-          onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 bg-primary-600 text-white px-6 py-3 rounded-full font-semibold shadow-lg hover:shadow-xl hover:bg-primary-700 transition-all duration-300 hover:-translate-y-0.5"
+          onClick={handleCreateActivityFast}
+          disabled={creating}
+          className="flex items-center gap-2 bg-primary-600 text-white px-6 py-3 rounded-full font-semibold shadow-lg hover:shadow-xl hover:bg-primary-700 transition-all duration-300 hover:-translate-y-0.5 disabled:opacity-50"
         >
-          <Plus weight="bold" className="w-5 h-5" />
+          {creating ? <SpinnerGap className="w-5 h-5 animate-spin" /> : <Plus weight="bold" className="w-5 h-5" />}
           <span>Buat Acara Baru</span>
         </button>
       </motion.div>
@@ -257,13 +242,13 @@ export default function DashboardPage() {
           </select>
 
           <select
-            value={filterDistrictId}
-            onChange={(e) => { setFilterDistrictId(e.target.value); setPage(1); }}
+            value={filterTagId}
+            onChange={(e) => { setFilterTagId(e.target.value); setPage(1); }}
             className="px-4 py-3 bg-white border border-slate-200/50 rounded-xl text-sm font-medium focus:ring-2 focus:ring-zinc-900/10 outline-none"
           >
-            <option value="">Semua Kecamatan</option>
-            {districts.map(d => (
-              <option key={d.id} value={d.id}>{d.name}</option>
+            <option value="">Semua Tag</option>
+            {tags.map(t => (
+              <option key={t.id} value={t.id}>{t.name}</option>
             ))}
           </select>
 
@@ -337,17 +322,35 @@ export default function DashboardPage() {
                     hidden: { opacity: 0, y: 20 },
                     show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 100 } }
                   }}
+                  whileHover={{ y: -4, boxShadow: '0 12px 24px -8px rgba(0,0,0,0.08)' }}
                   onClick={() => navigate(`/activity/${act.id}`)}
-                  className={`bento-card group cursor-pointer overflow-hidden hover-lift flex ${viewMode === 'grid' ? 'flex-col' : 'flex-row items-center p-4 gap-6'}`}
+                  className={`bento-card group cursor-pointer overflow-hidden flex ${viewMode === 'grid' ? 'flex-col' : 'flex-row items-center p-4 gap-6'}`}
                 >
                   {viewMode === 'grid' ? (
                     // GRID VIEW LAYOUT
                     <>
                       <div className="p-6 flex-1 flex flex-col">
                         <div className="flex items-start justify-between gap-4 mb-4">
-                          <div className="w-10 h-10 rounded-2xl bg-zinc-100 flex items-center justify-center group-hover:bg-zinc-900 group-hover:text-white transition-colors duration-300">
-                            <CalendarBlank weight="duotone" className="w-5 h-5" />
-                          </div>
+                          {act.thumbnail_media_id ? (
+                            <div className="w-10 h-10 rounded-2xl bg-zinc-100 flex items-center justify-center overflow-hidden shrink-0">
+                              <img 
+                                src={`${API_URL}/api/media/${act.thumbnail_media_id}/download?quality=preview&inline=true&token=${token}`} 
+                                alt="Thumbnail" 
+                                className="w-full h-full object-cover" 
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                  (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                                }}
+                              />
+                              <div className="hidden absolute flex items-center justify-center h-full w-full">
+                                <CalendarBlank weight="duotone" className="w-5 h-5 text-zinc-500" />
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="w-10 h-10 rounded-2xl bg-zinc-100 flex items-center justify-center group-hover:bg-zinc-900 group-hover:text-white transition-colors duration-300 shrink-0">
+                              <CalendarBlank weight="duotone" className="w-5 h-5" />
+                            </div>
+                          )}
                           <div className="flex items-center gap-2">
                             {act.is_archived && (
                               <span className="flex items-center gap-1 text-xs font-semibold bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full border border-amber-200">
@@ -365,12 +368,6 @@ export default function DashboardPage() {
                               <ImageIcon weight="bold" className="w-3.5 h-3.5" />
                               {act.media_count}
                             </span>
-                            {act.district_name && (
-                              <span className="flex items-center gap-1.5 text-xs font-semibold bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full border border-blue-100">
-                                <MapPin weight="bold" className="w-3.5 h-3.5" />
-                                {act.district_name}
-                              </span>
-                            )}
                           </div>
                         </div>
                         
@@ -427,8 +424,19 @@ export default function DashboardPage() {
                   ) : (
                     // LIST VIEW LAYOUT
                     <>
-                      <div className="w-12 h-12 shrink-0 rounded-2xl bg-zinc-100 flex items-center justify-center group-hover:bg-zinc-900 group-hover:text-white transition-colors duration-300">
-                        <CalendarBlank weight="duotone" className="w-6 h-6" />
+                      <div className="w-12 h-12 shrink-0 rounded-2xl bg-zinc-100 flex items-center justify-center group-hover:bg-zinc-900 group-hover:text-white transition-colors duration-300 overflow-hidden">
+                        {act.thumbnail_media_id ? (
+                          <img
+                            src={`${API_URL}/api/media/${act.thumbnail_media_id}/download?quality=preview&inline=true&token=${token}`}
+                            alt="Thumbnail"
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = 'none';
+                              (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                            }}
+                          />
+                        ) : null}
+                        <CalendarBlank weight="duotone" className={`${act.thumbnail_media_id ? 'hidden' : ''} w-6 h-6`} />
                       </div>
                       
                       <div className="flex-1 min-w-0">
@@ -448,12 +456,6 @@ export default function DashboardPage() {
                               <span className="truncate max-w-[120px]">{act.location}</span>
                             </div>
                           )}
-                          {act.district_name && (
-                            <div className="flex items-center gap-1.5 text-xs text-blue-700 bg-blue-50 px-2 py-1 rounded-lg">
-                              <MapPin className="w-3.5 h-3.5" />
-                              <span>{act.district_name}</span>
-                            </div>
-                          )}
                           {act.created_at && (
                             <div className="flex items-center gap-1.5 text-xs text-zinc-400 ml-2 border-l border-zinc-200 pl-3">
                               <span>Dibuat: {new Date(act.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
@@ -467,6 +469,11 @@ export default function DashboardPage() {
                           <div className="hidden md:flex items-center gap-1.5 text-sm font-medium text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100" title={`${act.compromised_count} file rusak`}>
                             <Warning weight="bold" className="w-4 h-4" />
                             <span>{act.compromised_count} Isu</span>
+                          </div>
+                        )}
+                        {act.tag_name && (
+                          <div className="hidden md:flex items-center gap-1.5 text-sm font-medium text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100">
+                            <span>{act.tag_name}</span>
                           </div>
                         )}
                         {act.team_name && (
@@ -551,134 +558,33 @@ export default function DashboardPage() {
           </p>
           {!search && (
             <button
-              onClick={() => setShowCreateModal(true)}
-              className="flex items-center gap-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-900 px-6 py-3 rounded-full font-semibold transition-colors hover-tactile"
+              onClick={handleCreateActivityFast}
+              disabled={creating}
+              className="flex items-center gap-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-900 px-6 py-3 rounded-full font-semibold transition-colors hover-tactile disabled:opacity-50"
             >
-              <Plus weight="bold" className="w-5 h-5" />
-              <span>Buat Acara Pertama</span>
+              {creating ? <SpinnerGap className="w-5 h-5 animate-spin" /> : <Plus weight="bold" className="w-5 h-5" />}
+              <span>Mulai Acara Pertama</span>
             </button>
           )}
         </motion.div>
       )}
 
-      {/* Create Modal */}
-      <AnimatePresence>
-        {showCreateModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm"
-              onClick={() => setShowCreateModal(false)}
-            />
-            <motion.div 
-              initial={{ opacity: 0, y: 20, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 20, scale: 0.95 }}
-              transition={{ type: "spring", stiffness: 200, damping: 25 }}
-              className="relative bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl border border-slate-100"
-            >
-              <div className="flex items-center justify-between mb-8">
-                <h2 className="text-2xl font-bold text-zinc-900 tracking-tight">Buat Acara Baru</h2>
-                <button 
-                  onClick={() => setShowCreateModal(false)} 
-                  className="w-10 h-10 flex items-center justify-center text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-full transition-colors"
-                >
-                  <X weight="bold" className="w-5 h-5" />
-                </button>
-              </div>
-              
-              <form onSubmit={handleCreateActivity} className="space-y-5">
-                <div className="space-y-2">
-                  <label htmlFor="create-title" className="text-xs font-semibold text-zinc-500 uppercase tracking-wider ml-1">Judul Acara *</label>
-                  <input
-                    id="create-title"
-                    type="text"
-                    required
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                    className="w-full px-4 py-3.5 bg-zinc-50 border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-zinc-900/10 focus:border-zinc-400 outline-none transition-all"
-                    placeholder="Contoh: Townhall Tahunan 2026"
-                  />
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                  <div className="space-y-2">
-                    <label htmlFor="create-date" className="text-xs font-semibold text-zinc-500 uppercase tracking-wider ml-1">Tanggal</label>
-                    <input
-                      id="create-date"
-                      type="date"
-                      value={newDate}
-                      onChange={(e) => setNewDate(e.target.value)}
-                      className="w-full px-4 py-3.5 bg-zinc-50 border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-zinc-900/10 focus:border-zinc-400 outline-none transition-all"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label htmlFor="create-location" className="text-xs font-semibold text-zinc-500 uppercase tracking-wider ml-1">Lokasi</label>
-                    <input
-                      id="create-location"
-                      type="text"
-                      value={newLocation}
-                      onChange={(e) => setNewLocation(e.target.value)}
-                      className="w-full px-4 py-3.5 bg-zinc-50 border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-zinc-900/10 focus:border-zinc-400 outline-none transition-all"
-                      placeholder="Jakarta Selatan"
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label htmlFor="create-team" className="text-xs font-semibold text-zinc-500 uppercase tracking-wider ml-1">Tim Liputan (Opsional)</label>
-                  <select
-                    id="create-team"
-                    value={newTeamId}
-                    onChange={(e) => setNewTeamId(e.target.value)}
-                    className="w-full px-4 py-3.5 bg-zinc-50 border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-zinc-900/10 focus:border-zinc-400 outline-none transition-all"
-                  >
-                    <option value="">Tidak Ada Tim</option>
-                    {teams.map(t => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <label htmlFor="create-district" className="text-xs font-semibold text-zinc-500 uppercase tracking-wider ml-1">Kecamatan Kegiatan *</label>
-                  <select
-                    id="create-district"
-                    required
-                    value={newDistrictId}
-                    onChange={(e) => setNewDistrictId(e.target.value)}
-                    className="w-full px-4 py-3.5 bg-zinc-50 border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-zinc-900/10 focus:border-zinc-400 outline-none transition-all"
-                  >
-                    <option value="">Pilih kecamatan</option>
-                    {districts.map(d => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-zinc-400 ml-1">
-                    Mengikuti lokasi kegiatan, bukan kecamatan akun pembuat.
-                  </p>
-                </div>
-                <div className="flex gap-4 pt-6">
-                  <button
-                    type="button"
-                    onClick={() => setShowCreateModal(false)}
-                    className="flex-1 py-3.5 px-4 bg-white border border-zinc-200 rounded-2xl font-semibold text-zinc-600 hover:bg-zinc-50 transition-colors"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={creating}
-                    className="flex-1 py-3.5 px-4 bg-primary-600 hover:bg-primary-700 text-white rounded-2xl font-semibold shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 flex items-center justify-center gap-2"
-                  >
-                    {creating ? <SpinnerGap weight="bold" className="w-5 h-5 animate-spin" /> : 'Buat Acara'}
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
+      <MasterActivityModal
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false);
+          setIsNewDraft(false);
+          fetchActivities();
+        }}
+        activityId={modalActivityId}
+        isNewDraft={isNewDraft}
+        onSaved={() => {
+          setIsModalOpen(false);
+          setIsNewDraft(false);
+          fetchActivities();
+        }}
+      />
+      
       <ConfirmDialog />
     </div>
   );

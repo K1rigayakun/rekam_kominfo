@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { PassThrough } from 'stream';
-const archiver = require('archiver');
+import { ZipArchive } from 'archiver';
 import PDFDocument from 'pdfkit';
 
 function requireEnv(name: string) {
@@ -50,7 +50,9 @@ function resolveDownloadTarget(file: any, quality: string) {
   };
 }
 
-const redis = new Redis(requireEnv('REDIS_URL'));
+const redis = new Redis(requireEnv('REDIS_URL'), {
+  maxRetriesPerRequest: null,
+});
 
 const db = new Client({
   connectionString: requireEnv('DATABASE_URL'),
@@ -86,7 +88,7 @@ async function processActivityZip(jobId: string, activityId: string, userId: str
   const tmpPath = path.join(os.tmpdir(), `export_${jobId}.zip`);
   const output = fs.createWriteStream(tmpPath);
   
-  const archive = archiver('zip', { zlib: { level: 5 } });
+  const archive = new ZipArchive({ zlib: { level: 5 } });
   archive.pipe(output);
 
   const { rows: mediaList } = await db.query(
@@ -131,7 +133,7 @@ async function processActivityZip(jobId: string, activityId: string, userId: str
   console.log(`[export] Selesai job ZIP untuk activity ${activityId}`);
 }
 
-async function processPublicZip(jobId: string, snapshotId: string, quality: string) {
+async function processPublicZip(jobId: string, snapshotId: string, quality: string, mediaIds?: string[]) {
   console.log(`[export] Memulai job Public ZIP untuk snapshot ${snapshotId}`);
   
   const { rows: snapshots } = await db.query(
@@ -152,20 +154,26 @@ async function processPublicZip(jobId: string, snapshotId: string, quality: stri
   const tmpPath = path.join(os.tmpdir(), `public_export_${jobId}.zip`);
   const output = fs.createWriteStream(tmpPath);
   
-  const archive = archiver('zip', { zlib: { level: 5 } });
+  const archive = new ZipArchive({ zlib: { level: 5 } });
   archive.pipe(output);
 
-  const { rows: mediaList } = await db.query(
-    `SELECT mf.id, mf.original_filename, mf.display_name, mf.media_type,
+  let query = `SELECT mf.id, mf.original_filename, mf.display_name, mf.media_type,
             mf.storage_key_raw, mf.storage_key_processed, mf.quality_variants,
             es.title as section_title
      FROM sharing_snapshot_items ssi
      JOIN media_files mf ON mf.id = ssi.media_id
      LEFT JOIN event_sections es ON es.id = mf.section_id
-     WHERE ssi.snapshot_id = $1
-     ORDER BY es.sort_order, mf.sort_order`,
-    [snapshotId]
-  );
+     WHERE ssi.snapshot_id = $1`;
+  const params: any[] = [snapshotId];
+
+  if (mediaIds && mediaIds.length > 0) {
+    query += ` AND ssi.media_id = ANY($2)`;
+    params.push(mediaIds);
+  }
+
+  query += ` ORDER BY es.sort_order, mf.sort_order`;
+
+  const { rows: mediaList } = await db.query(query, params);
 
   for (const media of mediaList) {
     const { bucket, key } = resolveDownloadTarget(media, quality);
@@ -241,7 +249,7 @@ async function processActivityPdf(jobId: string, activityId: string, userId: str
 
     doc.pipe(passThrough);
 
-    doc.fontSize(18).font('Helvetica-Bold').text('KEMENTERIAN KOMUNIKASI DAN INFORMATIKA', { align: 'center' });
+    doc.fontSize(18).font('Helvetica-Bold').text('DINAS KOMINFO KOTA MEDAN', { align: 'center' });
     doc.fontSize(12).font('Helvetica').text('Repositori Elektronik Kegiatan & Arsip Media (REKAM)', { align: 'center' });
     doc.moveDown(2);
 
@@ -256,9 +264,21 @@ async function processActivityPdf(jobId: string, activityId: string, userId: str
     doc.text(`Dibuat oleh: ${activity.created_by_name || '-'}`);
     doc.moveDown();
 
+    const stripHtml = (html: string) => {
+      if (!html) return '';
+      let text = html.replace(/<p[^>]*>/gi, '');
+      text = text.replace(/<\/p>/gi, '\n\n');
+      text = text.replace(/<br\s*[\/]?>/gi, '\n');
+      text = text.replace(/<li[^>]*>/gi, '• ');
+      text = text.replace(/<\/li>/gi, '\n');
+      text = text.replace(/<[^>]+>/g, '');
+      text = text.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+      return text.trim();
+    };
+
     if (activity.description) {
       doc.font('Helvetica-Bold').text('Deskripsi');
-      doc.font('Helvetica').text(activity.description);
+      doc.font('Helvetica').text(stripHtml(activity.description));
       doc.moveDown();
     }
 
@@ -368,7 +388,7 @@ async function start() {
 
   const worker = new Worker('export-processing', async (job: Job) => {
     console.log(`[export-processor] Memproses job ${job.id} (Type: ${job.data.entityType})`);
-    const { jobId, entityType, entityId, userId } = job.data;
+    const { jobId, entityType, entityId, userId, mediaIds } = job.data;
 
     try {
       await db.query(`UPDATE export_jobs SET status = 'PROCESSING' WHERE id = $1`, [jobId]);
@@ -378,9 +398,13 @@ async function start() {
       } else if (entityType === 'activity_pdf') {
         await processActivityPdf(jobId, entityId, userId);
       } else if (entityType === 'public_zip_original') {
-        await processPublicZip(jobId, entityId, 'original');
+        await processPublicZip(jobId, entityId, 'original', mediaIds);
       } else if (entityType === 'public_zip_preview') {
-        await processPublicZip(jobId, entityId, 'preview');
+        await processPublicZip(jobId, entityId, 'preview', mediaIds);
+      } else if (entityType === 'public_batch_zip_preview') {
+        await processPublicZip(jobId, entityId, 'preview', mediaIds);
+      } else if (entityType === 'public_batch_zip_original') {
+        await processPublicZip(jobId, entityId, 'original', mediaIds);
       } else {
         throw new Error(`Tipe ekspor tidak dikenali: ${entityType}`);
       }

@@ -1,17 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ChangeEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Download, WarningCircle, SpinnerGap, Image as ImageIcon, 
-  FilmStrip, CalendarBlank, MapPin, SquaresFour, Stack, Paperclip, MagnifyingGlass
+  Download, WarningCircle, SpinnerGap, Image as ImageIcon, UploadSimple,
+  FilmStrip, CalendarBlank, MapPin, SquaresFour, Stack, Paperclip, MagnifyingGlass, X
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
-import { api } from '../lib/api';
+import { api, API_URL } from '../lib/api';
 import RichTextViewer from '../components/RichTextViewer';
+import Lightbox from '../components/Lightbox';
 
 interface MediaItem {
   id: string;
   display_name: string;
+  original_filename?: string;
   title?: string;
   description?: string;
   description_json?: any;
@@ -20,6 +22,7 @@ interface MediaItem {
   height: number;
   duration_seconds?: number;
   quality_variants?: Record<string, string>;
+  persons?: { id: string; full_name: string }[];
 }
 
 interface SectionData {
@@ -39,6 +42,7 @@ interface PublicInfo {
   location: string;
   config?: {
     share_attachments?: boolean;
+    allow_upload?: boolean;
     description_mode?: 'NONE' | 'AUTO' | 'CUSTOM';
     custom_description?: string;
   };
@@ -54,7 +58,19 @@ export default function PublicViewerPage() {
   const [sections, setSections] = useState<SectionData[]>([]);
   const [attachments, setAttachments] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterPersonId, setFilterPersonId] = useState('');
   const [exportJobId, setExportJobId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [selectedMediaIds, setSelectedMediaIds] = useState<Set<string>>(new Set());
+
+  const allMedia = sections.flatMap(s => s.media);
+  
+  const allPersons = Array.from(new Map(
+    allMedia.flatMap(m => m.persons || []).map(p => [p.id, p])
+  ).values());
 
   async function fetchData() {
     try {
@@ -95,9 +111,73 @@ export default function PublicViewerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  const handleDownload = (mediaId: string, quality: string) => {
-    const url = `${api.defaults.baseURL || ''}/p/${token}/download/${mediaId}?quality=${quality}`;
-    window.open(url, '_blank');
+  const downloadBlobResponse = (blob: Blob, fallbackFilename: string, disposition?: string) => {
+    const filenameMatch = /filename="([^"]+)"/.exec(disposition || '');
+    const filename = filenameMatch?.[1] || fallbackFilename;
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(blobUrl);
+  };
+
+  const handleDownload = async (mediaId: string, quality: string) => {
+    try {
+      const res = await api.get(`/p/${token}/download/${mediaId}?quality=${quality}`, { responseType: 'blob' });
+      downloadBlobResponse(res.data, `REKAM_media_${mediaId}`, res.headers['content-disposition']);
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Gagal mengunduh media');
+    }
+  };
+
+  const handleAttachmentDownload = async (attachmentId: string) => {
+    try {
+      const res = await api.get(`/p/${token}/attachments/${attachmentId}/download`, { responseType: 'blob' });
+      downloadBlobResponse(res.data, `REKAM_lampiran_${attachmentId}`, res.headers['content-disposition']);
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Gagal mengunduh lampiran');
+    }
+  };
+
+  const handlePublicUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
+
+    setUploading(true);
+    const toastId = toast.loading(`Mengupload ${files.length} file...`);
+    let successCount = 0;
+    let failedCount = 0;
+
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        await api.post(`/p/${token}/upload`, formData);
+        successCount += 1;
+      } catch {
+        failedCount += 1;
+      }
+    }
+
+    event.target.value = '';
+    setUploading(false);
+
+    if (successCount > 0 && failedCount === 0) {
+      toast.success('Upload berhasil dikirim dan sedang diproses.', { id: toastId });
+    } else if (successCount > 0) {
+      toast.warning(`${successCount} file terkirim, ${failedCount} file gagal.`, { id: toastId });
+    } else {
+      toast.error('Upload gagal. Periksa ukuran dan format file.', { id: toastId });
+    }
+  };
+
+  const downloadPublicExportJob = async (jobId: string) => {
+    const res = await api.get(`/p/${token}/export-jobs/${jobId}/download`, { responseType: 'blob' });
+    downloadBlobResponse(res.data, `REKAM_export_${jobId}.zip`, res.headers['content-disposition']);
   };
 
   if (loading) {
@@ -134,6 +214,43 @@ export default function PublicViewerPage() {
     );
   }
 
+  const handleDownloadBatch = async (quality: string = 'original') => {
+    if (exportJobId || selectedMediaIds.size === 0) return;
+
+    try {
+      const toastId = toast.loading('Memproses kompresi ZIP batch, mohon tunggu...');
+      const res = await api.post(`/p/${token}/download-batch/zip`, {
+        quality,
+        media_ids: Array.from(selectedMediaIds)
+      });
+      const jobId = res.data.job_id;
+      setExportJobId(jobId);
+
+      const poll = setInterval(async () => {
+        try {
+          const statusRes = await api.get(`/p/${token}/export-jobs/${jobId}`);
+          if (statusRes.data.status === 'COMPLETED') {
+            clearInterval(poll);
+            setExportJobId(null);
+            toast.success('ZIP batch siap diunduh!', { id: toastId });
+            await downloadPublicExportJob(jobId);
+            setSelectedMediaIds(new Set());
+          } else if (statusRes.data.status === 'FAILED') {
+            clearInterval(poll);
+            setExportJobId(null);
+            toast.error(`Gagal membuat ZIP batch: ${statusRes.data.error_message}`, { id: toastId });
+          }
+        } catch {
+          clearInterval(poll);
+          setExportJobId(null);
+          toast.error('Terjadi kesalahan saat memproses ZIP batch', { id: toastId });
+        }
+      }, 3000);
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Gagal memulai kompresi ZIP batch');
+    }
+  };
+
   const handleDownloadAll = async (quality: string = 'original') => {
     if (exportJobId) return; // Prevent multiple clicks
 
@@ -150,7 +267,7 @@ export default function PublicViewerPage() {
             clearInterval(poll);
             setExportJobId(null);
             toast.success('ZIP siap diunduh!', { id: toastId });
-            window.location.href = `${api.defaults.baseURL || ''}/p/${token}/export-jobs/${jobId}/download`;
+            await downloadPublicExportJob(jobId);
           } else if (statusRes.data.status === 'FAILED') {
             clearInterval(poll);
             setExportJobId(null);
@@ -174,11 +291,11 @@ export default function PublicViewerPage() {
       {/* Liquid Glass Header */}
       <header className="fixed top-0 inset-x-0 z-50 liquid-glass border-b border-white/20">
         <div className="max-w-6xl mx-auto px-6 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
             <div className="w-10 h-10 rounded-[14px] overflow-hidden shadow-md bg-white flex items-center justify-center">
               <img src="/icon.png" alt="Rekam" className="w-full h-full object-cover" />
             </div>
-            <img src="/logo.png" alt="REKAM" className="h-9 w-auto object-contain hidden sm:block" />
+            <img src="/logo.png" alt="REKAM" className="h-14 w-auto object-contain -ml-2 hidden sm:block" />
           </div>
           
           <div className="flex items-center gap-3">
@@ -257,11 +374,11 @@ export default function PublicViewerPage() {
                   {attachments.map(att => (
                     <button 
                       key={att.id}
-                      onClick={() => window.open(`${api.defaults.baseURL || ''}/p/${token}/attachments/${att.id}/download`, '_blank')}
+                      onClick={() => handleAttachmentDownload(att.id)}
                       className="flex items-center gap-3 bg-white hover:bg-zinc-50 border border-zinc-200 px-4 py-2.5 rounded-xl text-sm font-medium text-zinc-700 premium-transition hover-lift shadow-sm"
                     >
                       <Download weight="bold" className="w-4 h-4 text-zinc-400" />
-                      <span className="truncate max-w-[200px]">{att.display_name || att.original_filename}</span>
+                      <span className="truncate max-w-[200px]">{att.display_name || (att as any).original_filename}</span>
                     </button>
                   ))}
                 </div>
@@ -273,29 +390,70 @@ export default function PublicViewerPage() {
           <div className="absolute -right-20 -top-20 w-96 h-96 bg-zinc-50 rounded-full blur-3xl pointer-events-none opacity-50" />
         </motion.div>
 
-        {/* Search Bar */}
-        <div className="mb-8 relative max-w-xl mx-auto">
-          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-            <MagnifyingGlass className="w-5 h-5 text-zinc-400" />
+        {info.config?.allow_upload && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-8 bento-card p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+          >
+            <div>
+              <h2 className="text-base font-bold text-zinc-900">Upload Media</h2>
+              <p className="text-sm text-zinc-500 mt-1">Kirim foto atau video untuk acara ini.</p>
+            </div>
+            <label className={`inline-flex items-center justify-center gap-2 px-5 py-3 rounded-2xl text-sm font-semibold premium-transition cursor-pointer ${uploading ? 'bg-zinc-200 text-zinc-500 pointer-events-none' : 'bg-primary-600 text-white hover:bg-primary-700 shadow-md shadow-primary-600/20'}`}>
+              {uploading ? <SpinnerGap weight="bold" className="w-4 h-4 animate-spin" /> : <UploadSimple weight="bold" className="w-4 h-4" />}
+              {uploading ? 'Mengupload...' : 'Pilih File'}
+              <input
+                type="file"
+                multiple
+                accept="image/*,video/*"
+                disabled={uploading}
+                onChange={handlePublicUpload}
+                className="sr-only"
+              />
+            </label>
+          </motion.div>
+        )}
+
+        {/* Search Bar & Filters */}
+        <div className="mb-8 flex flex-col sm:flex-row gap-4 max-w-2xl mx-auto">
+          <div className="relative flex-1">
+            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+              <MagnifyingGlass className="w-5 h-5 text-zinc-400" />
+            </div>
+            <input
+              type="text"
+              placeholder="Pencarian judul atau nama file..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-11 pr-4 py-3.5 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 transition-all shadow-sm text-zinc-700"
+            />
           </div>
-          <input
-            type="text"
-            placeholder="Cari nama media atau acara..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-11 pr-4 py-3.5 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 transition-all shadow-sm text-zinc-700"
-          />
+          {allPersons.length > 0 && (
+            <select
+              value={filterPersonId}
+              onChange={(e) => setFilterPersonId(e.target.value)}
+              className="px-4 py-3.5 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-primary-500/20 transition-all shadow-sm text-zinc-700"
+            >
+              <option value="">Semua Orang Terkait</option>
+              {allPersons.map(p => (
+                <option key={p.id} value={p.id}>{p.full_name}</option>
+              ))}
+            </select>
+          )}
         </div>
 
         {/* Media Gallery */}
         <div className="space-y-16">
           {sections.map((section, idx) => {
-            const filteredMedia = section.media.filter(m => 
-              m.display_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-              (m.title && m.title.toLowerCase().includes(searchQuery.toLowerCase()))
-            );
+            const filteredMedia = section.media.filter(m => {
+              const matchSearch = m.display_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                                  (m.title && m.title.toLowerCase().includes(searchQuery.toLowerCase()));
+              const matchPerson = filterPersonId === '' || (m.persons && m.persons.some(p => p.id === filterPersonId));
+              return matchSearch && matchPerson;
+            });
 
-            if (searchQuery && filteredMedia.length === 0) return null;
+            if ((searchQuery || filterPersonId) && filteredMedia.length === 0) return null;
 
             return (
             <motion.div 
@@ -306,15 +464,34 @@ export default function PublicViewerPage() {
               transition={{ duration: 0.5 }}
             >
               {section.title && (
-                <div className="mb-6">
-                  <div className="flex items-center gap-3 mb-2">
-                    <Stack weight="duotone" className="w-6 h-6 text-zinc-400" />
-                    <h2 className="text-2xl font-bold text-zinc-900 tracking-tight">{section.title}</h2>
-                  </div>
-                  {section.description_json && (
-                    <div className="pl-9 text-zinc-600">
-                      <RichTextViewer content={section.description_json} />
+                <div className="mb-6 flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-3 mb-2">
+                      <Stack weight="duotone" className="w-6 h-6 text-zinc-400" />
+                      <h2 className="text-2xl font-bold text-zinc-900 tracking-tight">{section.title}</h2>
                     </div>
+                    {section.description_json && (
+                      <div className="pl-9 text-zinc-600">
+                        <RichTextViewer content={section.description_json} />
+                      </div>
+                    )}
+                  </div>
+                  {filteredMedia.length > 0 && (
+                    <button 
+                      onClick={() => {
+                        const newSet = new Set(selectedMediaIds);
+                        const allSelected = filteredMedia.every(m => newSet.has(m.id));
+                        if (allSelected) {
+                          filteredMedia.forEach(m => newSet.delete(m.id));
+                        } else {
+                          filteredMedia.forEach(m => newSet.add(m.id));
+                        }
+                        setSelectedMediaIds(newSet);
+                      }}
+                      className="text-xs font-semibold text-primary-600 hover:text-primary-700 bg-primary-50 hover:bg-primary-100 px-3 py-1.5 rounded-lg transition-colors border border-primary-100 shadow-sm"
+                    >
+                      {filteredMedia.every(m => selectedMediaIds.has(m.id)) ? 'Batal Pilih Semua' : 'Pilih Semua'}
+                    </button>
                   )}
                 </div>
               )}
@@ -331,9 +508,27 @@ export default function PublicViewerPage() {
                   >
                     {/* Thumbnail Container */}
                     <div className="relative w-full aspect-square bg-zinc-100 rounded-2xl overflow-hidden border border-zinc-200 shadow-sm">
+                      <div 
+                        className="absolute top-2 left-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity"
+                        style={{ opacity: selectedMediaIds.has(media.id) ? 1 : undefined }}
+                      >
+                        <input 
+                          type="checkbox" 
+                          checked={selectedMediaIds.has(media.id)}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            const newSet = new Set(selectedMediaIds);
+                            if (e.target.checked) newSet.add(media.id);
+                            else newSet.delete(media.id);
+                            setSelectedMediaIds(newSet);
+                          }}
+                          onClick={e => e.stopPropagation()}
+                          className="w-5 h-5 rounded cursor-pointer border-zinc-300 text-primary-600 focus:ring-primary-500 shadow-sm bg-white"
+                        />
+                      </div>
                       {/* Real Image */}
                       <img 
-                        src={`${api.defaults.baseURL || ''}/p/${token}/download/${media.id}?quality=preview`} 
+                        src={`${API_URL}/p/${token}/download/${media.id}?quality=${media.media_type === 'VIDEO' ? 'thumbnail' : 'preview'}&inline=true`} 
                         alt={media.display_name}
                         className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                         onError={(e) => {
@@ -355,24 +550,32 @@ export default function PublicViewerPage() {
                       </div>
 
                       {/* Glass Overlay on Hover */}
-                      <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col items-center justify-center p-4 md:p-6">
+                      <div 
+                        className="absolute inset-0 bg-black/40 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-all duration-300 flex flex-col items-center justify-center p-4 md:p-6 cursor-pointer"
+                        onClick={() => {
+                          setLightboxIndex(allMedia.findIndex(m => m.id === media.id));
+                          setLightboxOpen(true);
+                        }}
+                      >
                         <p className="text-white text-xs md:text-sm text-center font-medium mb-4 md:mb-6 line-clamp-2 translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
                           {media.display_name}
                         </p>
                         <div className="flex flex-col gap-2 translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75 w-full max-w-[200px] px-4">
                           <select 
                             id={`quality-${media.id}`}
+                            onClick={e => e.stopPropagation()}
                             className="bg-black/50 text-white text-xs border border-white/20 rounded-xl px-3 py-2 outline-none backdrop-blur-md focus:bg-zinc-800 w-full"
                             defaultValue={info.download_quality === 'PREVIEW' ? 'preview' : 'original'}
                           >
-                            {(info.download_quality === 'PREVIEW' || info.download_quality === 'BOTH') && <option value="preview" className="text-zinc-900">Preview</option>}
+                            {(info.download_quality === 'PREVIEW' || info.download_quality === 'BOTH') && <option value="preview" className="bg-zinc-800 text-white">Preview</option>}
                             {media.media_type === 'VIDEO' && (info.download_quality === 'PREVIEW' || info.download_quality === 'BOTH') && media.quality_variants && Object.keys(media.quality_variants).map(q => (
-                              <option key={q} value={q} className="text-zinc-900">{q}</option>
+                              <option key={q} value={q} className="bg-zinc-800 text-white">{q}</option>
                             ))}
-                            {(info.download_quality === 'ORIGINAL' || info.download_quality === 'BOTH') && <option value="original" className="text-zinc-900">Original</option>}
+                            {(info.download_quality === 'ORIGINAL' || info.download_quality === 'BOTH') && <option value="original" className="bg-zinc-800 text-white">Original</option>}
                           </select>
                           <button 
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.stopPropagation();
                               const sel = document.getElementById(`quality-${media.id}`) as HTMLSelectElement;
                               handleDownload(media.id, sel?.value || 'original');
                             }}
@@ -383,17 +586,17 @@ export default function PublicViewerPage() {
                         </div>
                       </div>
                     </div>
-                    {/* Details below thumbnail */}
-                    {(media.title || media.description_json) && (
+                      {/* Details below thumbnail */}
                       <div className="mt-3 px-1">
-                        {media.title && <h4 className="font-semibold text-zinc-800 text-sm mb-1 line-clamp-1">{media.title}</h4>}
+                        <h4 className="font-semibold text-zinc-800 text-sm mb-1 line-clamp-1">
+                          {media.title || media.display_name || media.original_filename}
+                        </h4>
                         {media.description_json && (
                           <div className="text-xs text-zinc-500 line-clamp-2">
                             <RichTextViewer content={media.description_json} />
                           </div>
                         )}
                       </div>
-                    )}
                   </motion.div>
                 ))}
                 
@@ -420,6 +623,62 @@ export default function PublicViewerPage() {
           )}
         </div>
       </main>
+
+      <AnimatePresence>
+        {selectedMediaIds.size > 0 && (
+          <motion.div 
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 bg-zinc-900 text-white px-6 py-4 rounded-2xl shadow-2xl border border-zinc-800"
+          >
+            <div className="flex flex-col">
+              <span className="text-sm font-bold">{selectedMediaIds.size} Terpilih</span>
+              <span className="text-xs text-zinc-400">Siap diunduh zip</span>
+            </div>
+            
+            <div className="w-px h-8 bg-zinc-700 mx-2" />
+
+            {(info?.download_quality === 'PREVIEW' || info?.download_quality === 'BOTH') && (
+              <button 
+                onClick={() => handleDownloadBatch('preview')}
+                disabled={!!exportJobId}
+                className="bg-zinc-800 hover:bg-zinc-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Download className="w-4 h-4" />
+                Preview
+              </button>
+            )}
+
+            {(info?.download_quality === 'ORIGINAL' || info?.download_quality === 'BOTH') && (
+              <button 
+                onClick={() => handleDownloadBatch('original')}
+                disabled={!!exportJobId}
+                className="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center gap-2 shadow-md shadow-primary-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Download className="w-4 h-4" />
+                Original
+              </button>
+            )}
+
+            <button 
+              onClick={() => setSelectedMediaIds(new Set())}
+              className="text-zinc-400 hover:text-white p-2 rounded-xl transition-colors ml-2"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <Lightbox 
+        isOpen={lightboxOpen} 
+        onClose={() => setLightboxOpen(false)} 
+        mediaList={allMedia} 
+        initialIndex={lightboxIndex}
+        downloadUrlTemplate={(m) => `${API_URL}/p/${token}/download/${m.id}?quality=original`}
+        previewUrlTemplate={(m) => `${API_URL}/p/${token}/download/${m.id}?quality=preview&inline=true`}
+      />
     </div>
   );
 }

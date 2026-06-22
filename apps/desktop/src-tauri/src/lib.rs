@@ -81,6 +81,7 @@ pub struct DcimFile {
     pub file_path: String,
     pub file_name: String,
     pub file_size: u64,
+    pub modified_at: u64,
 }
 
 #[tauri::command]
@@ -91,10 +92,18 @@ fn scan_dcim_files(dcim_path: String) -> Result<Vec<DcimFile>, String> {
     for entry in walker.filter_map(|e| e.ok()) {
         if entry.file_type().is_file() {
             if let Ok(metadata) = entry.metadata() {
+                let modified_at = metadata
+                    .modified()
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or(std::time::Duration::from_secs(0))
+                    .as_secs();
+
                 files.push(DcimFile {
                     file_path: entry.path().to_string_lossy().to_string(),
                     file_name: entry.file_name().to_string_lossy().to_string(),
                     file_size: metadata.len(),
+                    modified_at,
                 });
             }
         }
@@ -130,13 +139,14 @@ fn get_keyring_token() -> Result<String, String> {
 #[tauri::command]
 fn delete_keyring_token() -> Result<(), String> {
     let entry = Entry::new("id.go.kominfo.rekam", "auth_token").map_err(|e| e.to_string())?;
-    let _ = entry.delete_password(); // Ignore error if not found
+    let _ = entry.delete_credential(); // Ignore error if not found
     Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_sql::Builder::new().build())
         .invoke_handler(tauri::generate_handler![

@@ -2,7 +2,8 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Image, Film, AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
-import { api } from '../../lib/api';
+import { api, API_URL } from '../../lib/api';
+import { useAuthStore } from '../../stores/authStore';
 
 interface SortableMediaItemProps {
   id: string;
@@ -29,6 +30,7 @@ export function SortableMediaItem({ id, media, onClick, filterUneditedOnly, view
     disabled: false, // Could disable if isEditing but wait, let's just use stopPropagation
   });
 
+  const { token } = useAuthStore();
   const [isEditing, setIsEditing] = useState(false);
   const [displayName, setDisplayName] = useState(media.display_name || media.original_filename);
   const [editName, setEditName] = useState(displayName);
@@ -82,8 +84,31 @@ export function SortableMediaItem({ id, media, onClick, filterUneditedOnly, view
     >
       {viewMode === 'list' ? (
         <div className="flex items-center gap-4 w-full h-16 px-4">
-          <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center shrink-0">
-             {media.media_type === 'IMAGE' ? <Image className="w-5 h-5 text-gray-400" /> : <Film className="w-5 h-5 text-gray-400" />}
+          <div className="w-10 h-10 bg-gray-200 rounded-lg flex items-center justify-center shrink-0 overflow-hidden relative">
+            {media.media_type === 'IMAGE' ? (
+              <img 
+                src={`${API_URL}/api/media/${media.id}/download?quality=preview&inline=true&token=${token}`} 
+                alt={media.display_name} 
+                className="w-full h-full object-cover" 
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                  (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                }}
+              />
+            ) : (
+              <video 
+                src={`${API_URL}/api/media/${media.id}/download?quality=preview&inline=true&token=${token}`} 
+                className="w-full h-full object-cover" 
+                controls
+                onError={(e) => {
+                  (e.target as HTMLVideoElement).style.display = 'none';
+                  (e.target as HTMLVideoElement).nextElementSibling?.classList.remove('hidden');
+                }}
+              />
+            )}
+            <div className="hidden absolute flex items-center justify-center h-full w-full">
+               {media.media_type === 'IMAGE' ? <Image className="w-5 h-5 text-gray-400" /> : <Film className="w-5 h-5 text-gray-400" />}
+            </div>
           </div>
           <div className="flex-1 min-w-0 flex flex-col justify-center" onDoubleClick={handleDoubleClick}>
             {isEditing ? (
@@ -114,12 +139,31 @@ export function SortableMediaItem({ id, media, onClick, filterUneditedOnly, view
         </div>
       ) : (
         <>
-          <div className="flex items-center justify-center h-full">
+          <div className="flex items-center justify-center h-full w-full bg-gray-200">
             {media.media_type === 'IMAGE' ? (
-              <Image className="w-8 h-8 text-gray-300" />
+              <img 
+                src={`${API_URL}/api/media/${media.id}/download?quality=preview&inline=true&token=${token}`} 
+                alt={media.display_name} 
+                className="w-full h-full object-cover" 
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                  (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                }}
+              />
             ) : (
-              <Film className="w-8 h-8 text-gray-300" />
+              <video 
+                src={`${API_URL}/api/media/${media.id}/download?quality=preview&inline=true&token=${token}`} 
+                className="w-full h-full object-cover" 
+                controls
+                onError={(e) => {
+                  (e.target as HTMLVideoElement).style.display = 'none';
+                  (e.target as HTMLVideoElement).nextElementSibling?.classList.remove('hidden');
+                }}
+              />
             )}
+            <div className="hidden absolute flex items-center justify-center h-full w-full">
+               {media.media_type === 'IMAGE' ? <Image className="w-8 h-8 text-gray-400" /> : <Film className="w-8 h-8 text-gray-400" />}
+            </div>
           </div>
           <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2.5" onDoubleClick={handleDoubleClick}>
             {isEditing ? (

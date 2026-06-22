@@ -19,6 +19,9 @@ async function authPluginCallback(fastify: FastifyInstance) {
     'authenticate',
     async function (request: FastifyRequest, reply: FastifyReply) {
       try {
+        if ((request.query as any)?.token) {
+          request.headers.authorization = 'Bearer ' + (request.query as any).token;
+        }
         const decoded = await request.jwtVerify<{
           id: string;
           email: string;

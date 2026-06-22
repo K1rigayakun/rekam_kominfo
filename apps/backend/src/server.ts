@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
+import { z } from 'zod';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import cookie from '@fastify/cookie';
@@ -30,6 +31,7 @@ import { teamRoutes } from './modules/teams/team.routes';
 import { districtRoutes } from './modules/districts/district.routes';
 import { exportRoutes } from './modules/export/export.routes';
 import { personRoutes } from './modules/persons/person.routes';
+import { tagsRoutes } from './modules/tags/tags.routes';
 
 function requireEnv(name: string) {
   const value = process.env[name];
@@ -68,6 +70,7 @@ function isPrivateNetworkHost(hostname: string) {
 function isAllowedOrigin(origin?: string) {
   if (!origin) return true;
   if (configuredPublicOrigins.includes(origin)) return true;
+  if (origin.endsWith('.loca.lt') || origin.endsWith('.pinggy.link')) return true;
   if (origin === 'tauri://localhost' || origin === 'asset://localhost' || origin === 'http://tauri.localhost') return true;
 
   if (process.env.NODE_ENV === 'development') {
@@ -84,12 +87,44 @@ function isAllowedOrigin(origin?: string) {
   return false;
 }
 
+function isZodValidationError(error: unknown): error is z.ZodError {
+  return error instanceof z.ZodError ||
+    ((error as any)?.name === 'ZodError' &&
+      (Array.isArray((error as any)?.errors) || Array.isArray((error as any)?.issues)));
+}
+
 async function main() {
-  // ─── CORS ──────────────────────────────────
+  server.addContentTypeParser('application/offset+octet-stream', (request, payload, done) => done(null));
+
+  // ─── Global Error Handler ──────────
+  server.setErrorHandler((error, request, reply) => {
+    if (isZodValidationError(error)) {
+      server.log.warn({ err: error }, 'Zod validation error');
+      return reply.status(400).send({
+        error: 'Validasi gagal',
+        details: (error as any).errors || (error as any).issues
+      });
+    }
+
+    server.log.error(error);
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    
+    // Jangan bocorkan error internal ke client saat production
+    if (process.env.NODE_ENV === 'production') {
+      return reply.status(500).send({ error: 'Internal Server Error' });
+    }
+    
+    return reply.status(500).send({ error: message, stack });
+  });
+
   await server.register(cors, {
     origin: (origin, callback) => {
       callback(null, isAllowedOrigin(origin));
     },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
+    allowedHeaders: ['Bypass-Tunnel-Reminder', 'localtunnel-bypass', 'Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'Tus-Resumable', 'Upload-Length', 'Upload-Metadata', 'Upload-Offset', 'Upload-Concat', 'Upload-Defer-Length'],
+    exposedHeaders: ['Upload-Offset', 'Location', 'Upload-Length', 'Tus-Version', 'Tus-Resumable', 'Tus-Max-Size', 'Tus-Extension', 'Upload-Metadata', 'Upload-Defer-Length', 'Upload-Concat', 'Content-Disposition', 'Content-Length'],
     credentials: true,
   });
 
@@ -150,6 +185,7 @@ async function main() {
   await server.register(authRoutes, { prefix: '/api/auth' });
   await server.register(userRoutes, { prefix: '/api/users' });
   await server.register(teamRoutes, { prefix: '/api/teams' });
+  await server.register(tagsRoutes, { prefix: '/api/tags' });
   await server.register(districtRoutes, { prefix: '/api/districts' });
   await server.register(activityRoutes, { prefix: '/api/activities' });
   await server.register(versionRoutes, { prefix: '/api/activities' });
@@ -162,6 +198,28 @@ async function main() {
   await server.register(auditRoutes, { prefix: '/api/audit' });
   await server.register(exportRoutes, { prefix: '/api/export' });
   await server.register(personRoutes, { prefix: '/api/persons' });
+
+  // ─── Global Error Handler ──────────
+  server.setErrorHandler((error, request, reply) => {
+    if (isZodValidationError(error)) {
+      server.log.warn({ err: error }, 'Zod validation error');
+      return reply.status(400).send({
+        error: 'Validasi gagal',
+        details: (error as any).errors || (error as any).issues
+      });
+    }
+
+    server.log.error(error);
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    
+    // Jangan bocorkan error internal ke client saat production
+    if (process.env.NODE_ENV === 'production') {
+      return reply.status(500).send({ error: 'Internal Server Error' });
+    }
+    
+    return reply.status(500).send({ error: message, stack });
+  });
 
   // ─── Start Server ─────────────────────────
   const port = Number(process.env.PORT) || 3000;

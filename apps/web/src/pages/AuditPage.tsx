@@ -12,6 +12,7 @@ import { animate, stagger } from "animejs";
 import { api } from "../lib/api";
 import { AnimatedText } from "../components/AnimatedText";
 import { MagneticButton } from "../components/MagneticButton";
+import { toast } from "sonner";
 
 export default function AuditPage() {
   const [logs, setLogs] = useState<any[]>([]);
@@ -87,6 +88,25 @@ export default function AuditPage() {
     }
   };
 
+  const downloadAuditExport = async (format: "csv" | "pdf") => {
+    try {
+      const res = await api.get(`/api/export/audit/${format}`, { responseType: "blob" });
+      const disposition = res.headers["content-disposition"] || "";
+      const filenameMatch = /filename="([^"]+)"/.exec(disposition);
+      const filename = filenameMatch?.[1] || `REKAM_Audit_Report.${format}`;
+      const blobUrl = URL.createObjectURL(res.data);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || `Gagal mengunduh ${format.toUpperCase()}`);
+    }
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0, y: 10 }}
@@ -106,12 +126,7 @@ export default function AuditPage() {
 
         <div className="flex items-center gap-3">
           <MagneticButton
-            onClick={() =>
-              window.open(
-                `${api.defaults.baseURL || ""}/api/export/audit/csv`,
-                "_blank",
-              )
-            }
+            onClick={() => downloadAuditExport("csv")}
             className="flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl text-sm font-medium border border-gray-200 shadow-sm premium-transition"
             title="Unduh Laporan CSV"
           >
@@ -119,12 +134,7 @@ export default function AuditPage() {
             Unduh CSV
           </MagneticButton>
           <MagneticButton
-            onClick={() =>
-              window.open(
-                `${api.defaults.baseURL || ""}/api/export/audit/pdf`,
-                "_blank",
-              )
-            }
+            onClick={() => downloadAuditExport("pdf")}
             className="flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl text-sm font-medium border border-gray-200 shadow-sm premium-transition"
             title="Unduh Laporan PDF"
           >

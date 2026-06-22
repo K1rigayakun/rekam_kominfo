@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import archiver from 'archiver';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import path from 'path';
 
 /**
  * Public routes — TANPA autentikasi.
@@ -21,6 +22,14 @@ export async function publicRoutes(fastify: FastifyInstance) {
   }
 
   function resolveDownloadTarget(file: any, quality: string) {
+    if (quality === 'thumbnail') {
+      return {
+        bucket: fastify.minioBuckets.processed,
+        key: file.storage_key_thumbnail || file.storage_key_processed,
+        contentType: 'image/webp',
+      };
+    }
+
     if (quality === 'preview') {
       return {
         bucket: fastify.minioBuckets.processed,
@@ -50,6 +59,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
   }
 
   function isPublicQualityAllowed(downloadQuality: string, quality: string) {
+    if (quality === 'thumbnail') return true;
     if (downloadQuality === 'BOTH') return true;
     if (downloadQuality === 'ORIGINAL') return quality === 'original';
     if (downloadQuality === 'PREVIEW') return quality !== 'original';
@@ -168,8 +178,11 @@ export async function publicRoutes(fastify: FastifyInstance) {
               es.id as section_id, es.title as section_title,
               mf.id as media_id, mf.display_name, mf.original_filename, 
               mf.media_type, mf.mime_type, mf.title as media_title,
-              mf.description as media_description, mf.width, mf.height,
-              mf.duration_seconds, mf.status, mf.quality_variants
+              mf.duration_seconds, mf.status, mf.quality_variants,
+              (SELECT json_agg(json_build_object('id', p.id, 'full_name', p.full_name))
+               FROM media_person_tags mpt
+               JOIN persons p ON p.id = mpt.person_id
+               WHERE mpt.media_id = mf.id) as persons
        FROM sharing_snapshot_items ssi
        LEFT JOIN event_sections es ON es.id = ssi.section_id
        LEFT JOIN media_files mf ON mf.id = ssi.media_id
@@ -200,6 +213,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
           height: item.height,
           duration_seconds: item.duration_seconds,
           quality_variants: item.quality_variants,
+          persons: item.persons || [],
         });
       }
     }
@@ -213,12 +227,76 @@ export async function publicRoutes(fastify: FastifyInstance) {
     });
   });
 
+  // ─── POST /p/:token/download-batch/zip ──────────────────
+  fastify.post('/:token/download-batch/zip', async (request: FastifyRequest<{ Params: { token: string }; Body: { quality?: string; media_ids: string[] } }>, reply: FastifyReply) => {
+    const { token } = request.params;
+    const { quality: requestedQuality, media_ids } = request.body || {};
+
+    if (!Array.isArray(media_ids) || media_ids.length === 0) {
+      return reply.status(400).send({ error: 'Tidak ada media yang dipilih' });
+    }
+
+    // Verifikasi snapshot aktif
+    const { rows: snapshot } = await fastify.db.query(
+      `SELECT ss.id, ss.title, ss.download_quality, ss.is_active, ss.expires_at,
+              a.title as activity_title, a.event_date
+       FROM sharing_snapshots ss
+       JOIN activities a ON a.id = ss.activity_id
+       WHERE ss.token = $1`,
+      [token]
+    );
+
+    if (snapshot.length === 0 || !snapshot[0].is_active) {
+      return reply.status(404).send({ error: 'Link tidak ditemukan' });
+    }
+
+    const snap = snapshot[0];
+    if (snap.expires_at && new Date(snap.expires_at) < new Date()) {
+      return reply.status(410).send({ error: 'Link ini sudah kedaluwarsa' });
+    }
+
+    const quality = applyDefaultPublicQuality(snap.download_quality, requestedQuality);
+    if (!isPublicQualityAllowed(snap.download_quality, quality)) {
+      return reply.status(403).send({ error: 'Kualitas download ini tidak diizinkan untuk link publik' });
+    }
+
+    // 1. Buat record export_job
+    const entityType = quality === 'preview' ? 'public_batch_zip_preview' : 'public_batch_zip_original';
+    
+    const { rows: jobs } = await fastify.db.query(
+      `INSERT INTO export_jobs (user_id, entity_type, entity_id, expires_at)
+       VALUES (NULL, $1, $2, NOW() + INTERVAL '24 hours') RETURNING id`,
+      [entityType, snap.id]
+    );
+
+    const jobId = jobs[0].id;
+
+    // 2. Masukkan ke queue
+    await fastify.exportQueue.add('export-zip', {
+      jobId,
+      entityType,
+      entityId: snap.id,
+      quality,
+      token,
+      mediaIds: media_ids
+    });
+
+    // 3. Log export request
+    await fastify.db.query(
+      `INSERT INTO audit_logs (action, entity_type, entity_id, details, ip_address)
+       VALUES ('EXPORT', 'snapshot', $1, $2, $3)`,
+      [snap.id, JSON.stringify({ type: 'BATCH_ZIP_REQUEST', via: 'public', token, quality, count: media_ids.length }), request.ip]
+    );
+
+    return reply.status(202).send({ message: 'Proses ekspor batch ZIP dimulai', job_id: jobId });
+  });
+
   // ─── GET /p/:token/download/:mediaId ───────
   // Download satu file media dari halaman publik
   fastify.get(
     '/:token/download/:mediaId',
     async (
-      request: FastifyRequest<{ Params: { token: string; mediaId: string }; Querystring: { quality?: string } }>,
+      request: FastifyRequest<{ Params: { token: string; mediaId: string }; Querystring: { quality?: string; inline?: string } }>,
       reply: FastifyReply
     ) => {
       const { token, mediaId } = request.params;
@@ -274,9 +352,10 @@ export async function publicRoutes(fastify: FastifyInstance) {
       const fileSize = stat.size;
 
       reply.header('Content-Type', contentType);
+      const disposition = request.query.inline === 'true' ? 'inline' : 'attachment';
       reply.header(
         'Content-Disposition',
-        `attachment; filename="${file.display_name || file.original_filename}"`
+        `${disposition}; filename="${file.display_name || file.original_filename}"`
       );
 
       let stream;
@@ -525,5 +604,111 @@ export async function publicRoutes(fastify: FastifyInstance) {
     } catch (err: any) {
       return reply.status(500).send({ error: 'Gagal mengambil file export' });
     }
+  });
+
+  // ─── POST /p/:token/upload ─────────────────
+  // Upload publik hanya aktif untuk snapshot QR yang mengizinkannya.
+  fastify.post('/:token/upload', async (request: FastifyRequest<{ Params: { token: string } }>, reply: FastifyReply) => {
+    const { token } = request.params;
+
+    const { rows: snapshot } = await fastify.db.query(
+      'SELECT id, activity_id, is_active, expires_at, config FROM sharing_snapshots WHERE token = $1',
+      [token]
+    );
+
+    if (snapshot.length === 0 || !snapshot[0].is_active) {
+      return reply.status(404).send({ error: 'Link tidak ditemukan' });
+    }
+
+    if (snapshot[0].expires_at && new Date(snapshot[0].expires_at) < new Date()) {
+      return reply.status(410).send({ error: 'Link ini sudah kedaluwarsa' });
+    }
+
+    const config = snapshot[0].config || {};
+    if (!config.allow_upload) {
+      return reply.status(403).send({ error: 'Upload publik tidak diizinkan untuk link ini' });
+    }
+
+    const data = await request.file();
+    if (!data) {
+      return reply.status(400).send({ error: 'File wajib disertakan' });
+    }
+
+    const sectionId = (data.fields as any).section_id?.value || null;
+    const activityId = snapshot[0].activity_id;
+    const publicUploadLimitBytes = Number(process.env.PUBLIC_UPLOAD_MAX_BYTES || 100 * 1024 * 1024);
+    const contentLength = Number(request.headers['content-length'] || 0);
+
+    if (contentLength > publicUploadLimitBytes) {
+      return reply.status(413).send({ error: 'Ukuran file melebihi batas upload publik' });
+    }
+
+    if (sectionId) {
+      const { rowCount } = await fastify.db.query(
+        `SELECT 1
+         FROM event_sections es
+         JOIN sharing_snapshot_items ssi ON ssi.section_id = es.id
+         WHERE es.id = $1 AND es.activity_id = $2 AND ssi.snapshot_id = $3
+         LIMIT 1`,
+        [sectionId, activityId, snapshot[0].id]
+      );
+      if (Number(rowCount) === 0) {
+        return reply.status(400).send({ error: 'Seksi tidak tersedia pada link publik ini' });
+      }
+    }
+
+    const mimeType = data.mimetype;
+    const isImage = mimeType.startsWith('image/');
+    const isVideo = mimeType.startsWith('video/');
+    if (!isImage && !isVideo) {
+      return reply.status(400).send({ error: 'Hanya file gambar atau video yang diterima' });
+    }
+
+    const fileBuffer = await data.toBuffer();
+    if (fileBuffer.length > publicUploadLimitBytes) {
+      return reply.status(413).send({ error: 'Ukuran file melebihi batas upload publik' });
+    }
+
+    const mediaType = isImage ? 'IMAGE' : 'VIDEO';
+    const fileExt = path.extname(data.filename);
+    const storageKey = `${activityId}/${sectionId || 'public-upload'}/${randomUUID()}${fileExt}`;
+    const checksumSha256 = createHash('sha256').update(fileBuffer).digest('hex');
+
+    await fastify.minio.putObject(fastify.minioBuckets.raw, storageKey, fileBuffer, fileBuffer.length, {
+      'Content-Type': mimeType,
+    });
+
+    const { rows } = await fastify.db.query(
+      `INSERT INTO media_files 
+       (section_id, activity_id, original_filename, media_type, mime_type,
+        file_size_bytes, storage_key_raw, checksum_sha256, status, uploaded_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PROCESSING', NULL)
+       RETURNING id, activity_id, original_filename, media_type, mime_type, file_size_bytes, status, created_at`,
+      [
+        sectionId, activityId, data.filename, mediaType, mimeType,
+        fileBuffer.length, storageKey, checksumSha256,
+      ]
+    );
+
+    const mediaId = rows[0].id;
+    await fastify.mediaQueue.add('process-media', {
+      mediaId,
+      activityId,
+      sectionId,
+      mimeType,
+      mediaType,
+      storageKeyRaw: storageKey,
+    }, {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5000 },
+    });
+
+    await fastify.db.query(
+      `INSERT INTO audit_logs (action, entity_type, entity_id, details, ip_address)
+       VALUES ('UPLOAD', 'media_file', $1, $2, $3)`,
+      [mediaId, JSON.stringify({ via: 'public', token, snapshot_id: snapshot[0].id, filename: data.filename }), request.ip]
+    );
+
+    return reply.status(201).send({ data: rows[0] });
   });
 }

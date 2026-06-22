@@ -7,7 +7,10 @@
   ],
   "permissions": [
     "core:default",
+    "dialog:default",
     "sql:default",
+    "sql:allow-execute",
+    "sql:allow-load",
     "store:default"
   ]
 }

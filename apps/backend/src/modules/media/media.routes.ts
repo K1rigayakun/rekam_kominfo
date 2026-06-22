@@ -21,7 +21,7 @@ const listMediaQuerySchema = z.object({
   is_edited: z.coerce.boolean().optional(),
   media_type: z.enum(['IMAGE', 'VIDEO']).optional(),
   page: z.coerce.number().min(1).default(1),
-  limit: z.coerce.number().min(1).max(100).default(50),
+  limit: z.coerce.number().min(1).max(1000).default(50),
 });
 
 const reorderMediaSchema = z.object({
@@ -247,7 +247,7 @@ export async function mediaRoutes(fastify: FastifyInstance) {
          JOIN persons p ON p.id = mpt.person_id
          WHERE mpt.media_id = mf.id) as persons,
         (SELECT json_agg(
-            json_build_object('id', t.id, 'name', t.name, 'district_id', t.district_id)
+            json_build_object('id', t.id, 'name', t.name)
           )
          FROM media_team_tags mtt
          JOIN teams t ON t.id = mtt.team_id
@@ -532,7 +532,7 @@ export async function mediaRoutes(fastify: FastifyInstance) {
          JOIN persons p ON p.id = mpt.person_id
          WHERE mpt.media_id = mf.id) as persons,
         (SELECT json_agg(
-            json_build_object('id', t.id, 'name', t.name, 'district_id', t.district_id)
+            json_build_object('id', t.id, 'name', t.name)
           )
          FROM media_team_tags mtt
          JOIN teams t ON t.id = mtt.team_id
@@ -868,7 +868,13 @@ export async function mediaRoutes(fastify: FastifyInstance) {
 
       let stream;
       reply.header('Content-Type', contentType);
-      reply.header('Content-Disposition', `attachment; filename="${media.display_name || media.original_filename}"`);
+      
+      const inline = (request.query as any).inline === 'true';
+      if (inline) {
+        reply.header('Content-Disposition', `inline; filename="${media.display_name || media.original_filename}"`);
+      } else {
+        reply.header('Content-Disposition', `attachment; filename="${media.display_name || media.original_filename}"`);
+      }
 
       if (parsedRange.range) {
         reply.code(206);
