@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { toast } from 'sonner';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -52,6 +52,7 @@ export default function ShareActivityPage() {
   
   const [selectedShareSections, setSelectedShareSections] = useState<Set<string>>(new Set());
   const [selectedShareMedia, setSelectedShareMedia] = useState<Set<string>>(new Set());
+  const [selectedShareAttachments, setSelectedShareAttachments] = useState<Set<string>>(new Set());
   
   const [creatingShare, setCreatingShare] = useState(false);
   const [shareResult, setShareResult] = useState<{ public_url: string; token: string } | null>(null);
@@ -83,6 +84,7 @@ export default function ShareActivityPage() {
       try {
         const attRes = await api.get(`/api/attachments?activity_id=${id}`);
         setAttachments(attRes.data.data);
+        setSelectedShareAttachments(new Set(attRes.data.data.map((a: any) => a.id)));
       } catch (err) {
         console.error('Failed to fetch attachments:', err);
       }
@@ -97,10 +99,9 @@ export default function ShareActivityPage() {
     }
   }
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchActivityAndShares();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   async function fetchShares() {
@@ -155,6 +156,7 @@ export default function ShareActivityPage() {
         items,
         config: {
           share_attachments: shareConfig.share_attachments,
+          allowed_attachment_ids: Array.from(selectedShareAttachments),
           description_mode: shareConfig.description_mode,
           custom_description: shareConfig.custom_description,
         }
@@ -235,7 +237,7 @@ export default function ShareActivityPage() {
         title: s.title,
         media: sectionMedia[s.id]?.filter(m => selectedShareMedia.has(m.id)) || []
       })) || [],
-      attachments: shareConfig.share_attachments ? attachments : [],
+      attachments: shareConfig.share_attachments ? attachments.filter(a => selectedShareAttachments.has(a.id)) : [],
     };
     sessionStorage.setItem('previewShareData', JSON.stringify(previewData));
     window.open('/preview', '_blank');
@@ -371,6 +373,28 @@ export default function ShareActivityPage() {
                       <span className="text-xs text-gray-500 block">Bagikan PDF/dokumen acara ke publik</span>
                     </div>
                   </label>
+
+                  {shareConfig.share_attachments && attachments.length > 0 && (
+                    <div className="mb-4 pl-8 border-l-2 border-primary-100 ml-2 space-y-2">
+                      {attachments.map(att => (
+                        <label key={att.id} className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer p-1 hover:bg-gray-50 rounded">
+                          <input 
+                            type="checkbox" 
+                            checked={selectedShareAttachments.has(att.id)}
+                            onChange={(e) => {
+                              const next = new Set(selectedShareAttachments);
+                              if (e.target.checked) next.add(att.id);
+                              else next.delete(att.id);
+                              setSelectedShareAttachments(next);
+                            }}
+                            className="w-4 h-4 text-primary-500 rounded"
+                          />
+                          <span className="truncate flex-1">{att.display_name || att.original_filename}</span>
+                          <span className="text-xs text-gray-400">{(att.file_size_bytes / 1024 / 1024).toFixed(2)} MB</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
 
                   <div className="border border-gray-200 rounded-xl p-4 bg-gray-50 max-h-64 overflow-y-auto space-y-4">
                     {activity?.use_sections ? (
@@ -512,7 +536,24 @@ export default function ShareActivityPage() {
                       }}
                       className="w-full py-3 bg-white border border-primary-200 text-primary-600 hover:bg-primary-50 hover:border-primary-300 rounded-xl font-bold premium-transition flex justify-center items-center gap-2"
                     >
-                      <Download className="w-5 h-5" /> Download QR Code (PNG)
+                      <Download className="w-5 h-5" /> Download QR (PNG)
+                    </button>
+                    <button
+                      onClick={() => {
+                        const svg = document.querySelector('.qr-container svg');
+                        if (!svg) return;
+                        const svgData = new XMLSerializer().serializeToString(svg);
+                        const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const downloadLink = document.createElement('a');
+                        downloadLink.download = `QR_${activity?.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'share'}.svg`;
+                        downloadLink.href = url;
+                        downloadLink.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                      className="w-full py-3 bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300 rounded-xl font-bold premium-transition flex justify-center items-center gap-2 mt-2"
+                    >
+                      <Download className="w-5 h-5" /> Download QR (SVG)
                     </button>
                   </div>
                   <button

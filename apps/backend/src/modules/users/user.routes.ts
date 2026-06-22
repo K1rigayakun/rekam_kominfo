@@ -28,7 +28,7 @@ export async function userRoutes(fastify: FastifyInstance) {
   // ─── GET /api/users ────────────────────────
   fastify.get(
     '/',
-    { preHandler: [fastify.requireEditor] },
+    { preHandler: [fastify.requireSuperAdmin] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { rows } = await fastify.db.query(
         `SELECT u.id, u.email, u.full_name, u.role, u.district_id, 

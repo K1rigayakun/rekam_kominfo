@@ -5,6 +5,7 @@ import jwt from '@fastify/jwt';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
+import fastifyHelmet from '@fastify/helmet';
 
 // Plugins
 import { dbPlugin } from './plugins/db';
@@ -67,6 +68,7 @@ function isPrivateNetworkHost(hostname: string) {
 function isAllowedOrigin(origin?: string) {
   if (!origin) return true;
   if (configuredPublicOrigins.includes(origin)) return true;
+  if (origin === 'tauri://localhost' || origin === 'asset://localhost' || origin === 'http://tauri.localhost') return true;
 
   if (process.env.NODE_ENV === 'development') {
     try {
@@ -97,6 +99,22 @@ async function main() {
     timeWindow: Number(process.env.RATE_LIMIT_PUBLIC_WINDOW_MS) || 3600000,
   });
 
+  // ─── Security Header (Helmet) ──────────────
+  await server.register(fastifyHelmet, {
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        imgSrc: ["'self'", "data:", "blob:", "http:", "https:"],
+        connectSrc: ["'self'", "http:", "https:", "ws:", "wss:"],
+        mediaSrc: ["'self'", "blob:", "http:", "https:"],
+      },
+    },
+    crossOriginResourcePolicy: { policy: "cross-origin" }
+  });
+
   // ─── Cookie ────────────────────────────────
   await server.register(cookie);
 
@@ -118,6 +136,9 @@ async function main() {
   await server.register(minioPlugin);
   await server.register(authPlugin);
   await server.register(queuePlugin);
+
+  const cronPlugin = require('./plugins/cron').default;
+  await server.register(cronPlugin);
 
   // ─── Health Check ──────────────────────────
   server.get('/health', async () => ({

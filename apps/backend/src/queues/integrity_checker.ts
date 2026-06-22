@@ -5,18 +5,26 @@ import { Client } from 'pg';
 import * as Minio from 'minio';
 import crypto from 'crypto';
 
-const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+function requireEnv(name: string) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Environment variable ${name} wajib diisi`);
+  }
+  return value;
+}
+
+const redis = new Redis(requireEnv('REDIS_URL'));
 
 const db = new Client({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: requireEnv('DATABASE_URL'),
 });
 
 const minio = new Minio.Client({
   endPoint: process.env.MINIO_ENDPOINT || 'localhost',
   port: Number(process.env.MINIO_PORT) || 9000,
   useSSL: process.env.MINIO_USE_SSL === 'true',
-  accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-  secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
+  accessKey: requireEnv('MINIO_ACCESS_KEY'),
+  secretKey: requireEnv('MINIO_SECRET_KEY'),
 });
 
 const RAW_BUCKET = process.env.MINIO_BUCKET_RAW || 'rekam-raw';

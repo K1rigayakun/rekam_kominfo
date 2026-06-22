@@ -5,6 +5,7 @@ import {
   Download, WarningCircle, SpinnerGap, Image as ImageIcon, 
   FilmStrip, CalendarBlank, MapPin, SquaresFour, Stack, Paperclip, MagnifyingGlass
 } from '@phosphor-icons/react';
+import { toast } from 'sonner';
 import { api } from '../lib/api';
 import RichTextViewer from '../components/RichTextViewer';
 
@@ -53,16 +54,17 @@ export default function PublicViewerPage() {
   const [sections, setSections] = useState<SectionData[]>([]);
   const [attachments, setAttachments] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [exportJobId, setExportJobId] = useState<string | null>(null);
 
   async function fetchData() {
     try {
       setLoading(true);
       setError('');
       
-      const infoRes = await api.get(`/api/public/${token}/info`);
+      const infoRes = await api.get(`/p/${token}/info`);
       setInfo(infoRes.data.data);
 
-      const mediaRes = await api.get(`/api/public/${token}/media`);
+      const mediaRes = await api.get(`/p/${token}/media`);
       
       if (mediaRes.data.data.config) {
         setInfo((prev) => prev ? { ...prev, config: mediaRes.data.data.config } : prev);
@@ -71,9 +73,9 @@ export default function PublicViewerPage() {
       setSections(mediaRes.data.data.sections);
 
       try {
-        const attachRes = await api.get(`/api/public/${token}/attachments`);
+        const attachRes = await api.get(`/p/${token}/attachments`);
         setAttachments(attachRes.data.data || []);
-      } catch (e) {
+      } catch {
         console.warn('Attachments not available or not shared');
       }
 
@@ -90,10 +92,11 @@ export default function PublicViewerPage() {
 
   useEffect(() => {
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  const handleDownload = (mediaId: string, quality: 'preview' | 'original') => {
-    const url = `${api.defaults.baseURL || ''}/api/public/${token}/download/${mediaId}?quality=${quality}`;
+  const handleDownload = (mediaId: string, quality: string) => {
+    const url = `${api.defaults.baseURL || ''}/p/${token}/download/${mediaId}?quality=${quality}`;
     window.open(url, '_blank');
   };
 
@@ -131,14 +134,37 @@ export default function PublicViewerPage() {
     );
   }
 
-  const handleDownloadAll = (quality: string = 'original') => {
-    const url = `${api.defaults.baseURL || ''}/api/public/${token}/download-all/zip?quality=${quality}`;
-    window.open(url, '_blank');
-  };
+  const handleDownloadAll = async (quality: string = 'original') => {
+    if (exportJobId) return; // Prevent multiple clicks
 
-  const handleDownload = (mediaId: string, quality: string = 'original') => {
-    const url = `${api.defaults.baseURL || ''}/api/public/${token}/media/${mediaId}/download?quality=${quality}`;
-    window.open(url, '_blank');
+    try {
+      const toastId = toast.loading('Memproses kompresi ZIP, mohon tunggu...');
+      const res = await api.get(`/p/${token}/download-all/zip?quality=${quality}`);
+      const jobId = res.data.job_id;
+      setExportJobId(jobId);
+
+      const poll = setInterval(async () => {
+        try {
+          const statusRes = await api.get(`/p/${token}/export-jobs/${jobId}`);
+          if (statusRes.data.status === 'COMPLETED') {
+            clearInterval(poll);
+            setExportJobId(null);
+            toast.success('ZIP siap diunduh!', { id: toastId });
+            window.location.href = `${api.defaults.baseURL || ''}/p/${token}/export-jobs/${jobId}/download`;
+          } else if (statusRes.data.status === 'FAILED') {
+            clearInterval(poll);
+            setExportJobId(null);
+            toast.error(`Gagal membuat ZIP: ${statusRes.data.error_message}`, { id: toastId });
+          }
+        } catch {
+          clearInterval(poll);
+          setExportJobId(null);
+          toast.error('Terjadi kesalahan saat memproses ZIP', { id: toastId });
+        }
+      }, 3000);
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Gagal memulai ekspor ZIP');
+    }
   };
 
   const pageTitle = info.title || info.activity_title;
@@ -231,7 +257,7 @@ export default function PublicViewerPage() {
                   {attachments.map(att => (
                     <button 
                       key={att.id}
-                      onClick={() => window.open(`${api.defaults.baseURL || ''}/api/public/${token}/attachments/${att.id}/download`, '_blank')}
+                      onClick={() => window.open(`${api.defaults.baseURL || ''}/p/${token}/attachments/${att.id}/download`, '_blank')}
                       className="flex items-center gap-3 bg-white hover:bg-zinc-50 border border-zinc-200 px-4 py-2.5 rounded-xl text-sm font-medium text-zinc-700 premium-transition hover-lift shadow-sm"
                     >
                       <Download weight="bold" className="w-4 h-4 text-zinc-400" />
@@ -305,8 +331,22 @@ export default function PublicViewerPage() {
                   >
                     {/* Thumbnail Container */}
                     <div className="relative w-full aspect-square bg-zinc-100 rounded-2xl overflow-hidden border border-zinc-200 shadow-sm">
-                      {/* Placeholder */}
-                      <div className="absolute inset-0 flex items-center justify-center bg-zinc-100 transition-transform duration-500 group-hover:scale-105">
+                      {/* Real Image */}
+                      <img 
+                        src={`${api.defaults.baseURL || ''}/p/${token}/download/${media.id}?quality=preview`} 
+                        alt={media.display_name}
+                        className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                        onError={(e) => {
+                          // Fallback to placeholder if broken
+                          (e.target as HTMLImageElement).style.display = 'none';
+                          const nextSibling = (e.target as HTMLElement).nextElementSibling;
+                          if (nextSibling) {
+                            (nextSibling as HTMLElement).style.display = 'flex';
+                          }
+                        }}
+                      />
+                      {/* Placeholder (hidden by default unless error) */}
+                      <div className="absolute inset-0 flex items-center justify-center bg-zinc-100 transition-transform duration-500 group-hover:scale-105" style={{ display: 'none' }}>
                         {media.media_type === 'IMAGE' ? (
                           <ImageIcon weight="light" className="w-12 h-12 text-zinc-300" />
                         ) : (

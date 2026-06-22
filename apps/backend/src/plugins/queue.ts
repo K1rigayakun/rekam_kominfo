@@ -5,6 +5,7 @@ import { FastifyInstance } from 'fastify';
 declare module 'fastify' {
   interface FastifyInstance {
     mediaQueue: Queue;
+    exportQueue: Queue;
   }
 }
 
@@ -17,9 +18,15 @@ export default fp(async (fastify: FastifyInstance) => {
     connection: fastify.redis.duplicate() as any,
   });
 
+  const exportQueue = new Queue('export-processing', {
+    connection: fastify.redis.duplicate() as any,
+  });
+
   fastify.decorate('mediaQueue', mediaQueue);
+  fastify.decorate('exportQueue', exportQueue);
 
   fastify.addHook('onClose', async (instance) => {
     await instance.mediaQueue.close();
+    await instance.exportQueue.close();
   });
 });

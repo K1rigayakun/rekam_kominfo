@@ -13,7 +13,7 @@ import { useState } from 'react';
 import { api } from '../lib/api';
 
 const navItems = [
-  { to: '/', label: 'Acara', icon: Calendar, roles: ['SUPER_ADMIN', 'EDITOR', 'VIEWER'] },
+  { to: '/', label: 'Acara', icon: Calendar, roles: ['SUPER_ADMIN', 'EDITOR'] },
   { to: '/users', label: 'Pengguna', icon: Users, roles: ['SUPER_ADMIN'] },
   { to: '/teams', label: 'Tim Liputan', icon: Building2, roles: ['SUPER_ADMIN'] },
   { to: '/districts', label: 'Kecamatan', icon: Building2, roles: ['SUPER_ADMIN'] },

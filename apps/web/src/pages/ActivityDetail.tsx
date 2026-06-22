@@ -6,9 +6,10 @@ import { useAuthStore } from '../stores/authStore';
 import { motion } from 'motion/react';
 import * as tus from 'tus-js-client';
 import {
-  ArrowLeft, Calendar, MapPin, Users, Image, Film,
+  ArrowLeft, Calendar, MapPin, Users, Image, Film, CheckCircle,
   Plus, Pencil, Trash2, Upload, Share2, Paperclip, Loader2, X, Download, FileText, LayoutGrid, List, History,
 } from 'lucide-react';
+import { PencilSimple } from '@phosphor-icons/react';
 import RichTextEditor from '../components/RichTextEditor';
 import RichTextViewer from '../components/RichTextViewer';
 import { DraggableSectionList } from '../components/dnd/DraggableSectionList';
@@ -54,6 +55,32 @@ interface Activity {
   sections: Section[];
   unsectioned_media: MediaFile[];
   attachments: any[];
+}
+
+async function sha256BrowserFile(file: File) {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function getTusChunkSize(fileSize: number) {
+  if (fileSize < 100 * 1024 * 1024) return 5 * 1024 * 1024;
+  if (fileSize < 1024 * 1024 * 1024) return 10 * 1024 * 1024;
+  return 25 * 1024 * 1024;
+}
+
+async function runLimited<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) {
+  const queue = [...items];
+  const runners = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (item) {
+        await worker(item);
+      }
+    }
+  });
+  await Promise.all(runners);
 }
 
 export default function ActivityDetailPage() {
@@ -105,6 +132,8 @@ export default function ActivityDetailPage() {
   const [attachments, setAttachments] = useState<any[]>([]);
   const [fetchingAttachments, setFetchingAttachments] = useState(false);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [editingAttachmentId, setEditingAttachmentId] = useState<string | null>(null);
+  const [editAttachmentName, setEditAttachmentName] = useState('');
 
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -117,6 +146,7 @@ export default function ActivityDetailPage() {
   const [deletingActivity, setDeletingActivity] = useState(false);
 
   const [deleteSectionState, setDeleteSectionState] = useState<{ sectionId: string; action: 'MOVE_MEDIA_TO_UNSECTIONED' | 'DELETE_MEDIA' } | null>(null);
+  const [useAutoNaming, setUseAutoNaming] = useState(false);
 
   const fetchActivity = useCallback(async () => {
     try {
@@ -205,20 +235,59 @@ export default function ActivityDetailPage() {
     }
   };
 
+  const downloadExportJob = async (jobId: string) => {
+    const response = await api.get(`/api/export/download/${jobId}`, { responseType: 'blob' });
+    const disposition = response.headers['content-disposition'] || '';
+    const filenameMatch = /filename="([^"]+)"/.exec(disposition);
+    const filename = filenameMatch?.[1] || `REKAM_export_${jobId}`;
+    const blobUrl = URL.createObjectURL(response.data);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(blobUrl);
+  };
+
+  const pollExportJob = async (jobId: string, type: string) => {
+    toast.success(`Memulai pembuatan ${type}. Memproses di latar belakang...`, { duration: 5000 });
+    
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.get(`/api/export/jobs/${jobId}`);
+        const job = res.data;
+        
+        if (job.status === 'COMPLETED') {
+          clearInterval(interval);
+          toast.success(`${type} berhasil dibuat! Mengunduh file...`);
+          await downloadExportJob(jobId);
+        } else if (job.status === 'FAILED') {
+          clearInterval(interval);
+          toast.error(`Gagal membuat ${type}: ${job.error_message || 'Kesalahan sistem'}`);
+        }
+      } catch {
+        clearInterval(interval);
+        toast.error(`Gagal mengecek status ${type}.`);
+      }
+    }, 3000);
+  };
+
   const handleDownloadZip = async () => {
     try {
-      // Indicate loading state here if needed, but for simplicity let's just show an alert or rely on browser
-      toast.success('Memulai unduhan ZIP. Mohon tunggu...');
-      const res = await api.get(`/api/activities/${id}/export/zip`, { responseType: 'blob' });
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `${activity?.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_export.zip`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-    } catch (err) {
-      toast.error('Gagal mengunduh file ZIP. Pastikan ada media yang tersedia.');
+      const res = await api.get(`/api/export/activity/${id}/zip`);
+      pollExportJob(res.data.job_id, 'ZIP');
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Gagal memulai unduhan ZIP.');
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    try {
+      const res = await api.get(`/api/export/activity/${id}/pdf`);
+      pollExportJob(res.data.job_id, 'PDF');
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Gagal memulai unduhan PDF.');
     }
   };
 
@@ -316,11 +385,66 @@ export default function ActivityDetailPage() {
     const { token } = useAuthStore.getState();
 
     try {
-      const uploadPromises = uploadFiles.map((file) => {
-        return new Promise<void>((resolve, reject) => {
+      // 1. Calculate hashes sequentially so large videos do not all sit in memory at once.
+      const fileHashes: Array<{ file: File; hashHex: string; queueId: string }> = [];
+      for (const [index, file] of uploadFiles.entries()) {
+        setUploadProgress(prev => ({ ...prev, [file.name]: 0 }));
+        try {
+          const hashHex = await sha256BrowserFile(file);
+          fileHashes.push({ file, hashHex, queueId: `${file.name}-${file.size}-${file.lastModified}-${index}` });
+        } catch (e) {
+          console.warn('Gagal menghitung hash', e);
+          fileHashes.push({ file, hashHex: '', queueId: `${file.name}-${file.size}-${file.lastModified}-${index}` });
+        }
+      }
+
+      // 2. Batch check duplicates
+      const hashesToCheck = fileHashes.filter(f => f.hashHex);
+      let existingHashes: string[] = [];
+      let duplicateResults: Record<string, any> = {};
+      if (hashesToCheck.length > 0) {
+        try {
+          const dupRes = await api.post('/api/media/check-duplicate-batch', {
+            activity_id: id,
+            files: hashesToCheck.map((item) => ({
+              id: item.queueId,
+              checksum_sha256: item.hashHex,
+            })),
+          });
+          existingHashes = dupRes.data.existing_hashes || [];
+          duplicateResults = dupRes.data.data?.results || {};
+        } catch (e) {
+          console.warn('Gagal cek duplikat batch', e);
+        }
+      }
+
+      // 3. Upload only missing files
+      await runLimited(fileHashes, 3, async ({ file, hashHex, queueId }) => {
+        if (hashHex && existingHashes.includes(hashHex)) {
+          toast.info(`File ${file.name} sudah ada di sistem, dilewati.`);
+          setUploadProgress(prev => ({ ...prev, [file.name]: 100 }));
+          return;
+        }
+
+        const duplicate = duplicateResults[queueId];
+        if (hashHex && duplicate?.reusable && !duplicate?.exists_in_activity) {
+          await api.post('/api/media/attach-duplicate', {
+            activity_id: id,
+            section_id: selectedSectionId && selectedSectionId !== 'flat' ? selectedSectionId : null,
+            checksum_sha256: hashHex,
+            filename: file.name,
+            mime_type: file.type || 'application/octet-stream',
+          });
+          toast.success(`File ${file.name} dipakai ulang tanpa upload ulang.`);
+          setUploadProgress(prev => ({ ...prev, [file.name]: 100 }));
+          return;
+        }
+
+        await new Promise<void>((resolve, reject) => {
           const upload = new tus.Upload(file, {
             endpoint: `${API_URL}/api/upload/tus/`,
             retryDelays: [0, 3000, 5000, 10000, 20000],
+            chunkSize: getTusChunkSize(file.size),
             headers: {
               Authorization: `Bearer ${token}`
             },
@@ -328,8 +452,11 @@ export default function ActivityDetailPage() {
               filename: file.name,
               filetype: file.type,
               activity_id: id || '',
-              section_id: selectedSectionId || '',
-              mime_type: file.type
+              section_id: selectedSectionId && selectedSectionId !== 'flat' ? selectedSectionId : '',
+              mime_type: file.type,
+              sha256_local: hashHex,
+              file_size: String(file.size),
+              auto_naming: useAutoNaming ? 'true' : 'false'
             },
             onError: function(error) {
               console.error('Failed because: ' + error);
@@ -352,8 +479,6 @@ export default function ActivityDetailPage() {
           });
         });
       });
-
-      await Promise.all(uploadPromises);
 
       setShowUploadModal(false);
       setUploadFiles([]);
@@ -425,6 +550,18 @@ export default function ActivityDetailPage() {
     }
   };
 
+  const handleRenameAttachment = async (attachmentId: string, newName: string) => {
+    if (!newName.trim()) return;
+    try {
+      await api.put(`/api/attachments/${attachmentId}`, { display_name: newName });
+      if (attachmentModalSection) {
+        fetchAttachments(attachmentModalSection);
+      }
+      toast.success('Nama lampiran berhasil diubah');
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Gagal mengubah nama lampiran');
+    }
+  };
   async function fetchTeams() {
     setFetchingTeams(true);
     try {
@@ -514,11 +651,28 @@ export default function ActivityDetailPage() {
       link.setAttribute('download', filename);
       document.body.appendChild(link);
       link.click();
-      link.remove();
-    } catch (err) {
+      link.parentNode?.removeChild(link);
+    } catch {
       toast.error('Gagal mengunduh lampiran');
     }
   };
+
+  const handleDownloadIndividualMedia = async (mediaId: string, quality: 'original' | 'preview', filename: string) => {
+    try {
+      const res = await api.get(`/api/media/${mediaId}/download?quality=${quality}`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `${quality}_${filename}`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode?.removeChild(link);
+    } catch {
+      toast.error('Gagal mengunduh media');
+    }
+  };
+
+  // ─── EFFECTS ───────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -618,7 +772,7 @@ export default function ActivityDetailPage() {
           Unduh ZIP
         </button>
         <button 
-          onClick={() => window.open(`${api.defaults.baseURL || ''}/api/export/activity/${id}/pdf`, '_blank')}
+          onClick={handleDownloadPdf}
           className="flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl text-sm font-medium border border-gray-200 premium-transition"
         >
           <FileText className="w-4 h-4" />
@@ -955,6 +1109,21 @@ export default function ActivityDetailPage() {
                   <p className="text-xs text-text-muted mt-2">{uploadFiles.length} file dipilih</p>
                 )}
 
+                {!uploading && (
+                  <div className="mt-4 flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="useAutoNaming"
+                      checked={useAutoNaming}
+                      onChange={(e) => setUseAutoNaming(e.target.checked)}
+                      className="w-4 h-4 text-primary-600 rounded border-gray-300 focus:ring-primary-500"
+                    />
+                    <label htmlFor="useAutoNaming" className="text-sm text-gray-700 cursor-pointer">
+                      Terapkan penamaan otomatis ({activity.title} - Foto 01)
+                    </label>
+                  </div>
+                )}
+
                 {/* Progress UI */}
                 {uploading && uploadFiles.length > 0 && (
                   <div className="mt-4 space-y-3 max-h-[300px] overflow-y-auto pr-2">
@@ -1102,6 +1271,23 @@ export default function ActivityDetailPage() {
               )}
             </div>
 
+            <div className="flex gap-2 mb-5">
+              <button
+                type="button"
+                onClick={() => handleDownloadIndividualMedia(selectedMediaForEdit.id, 'original', selectedMediaForEdit.original_filename)}
+                className="flex-1 py-2.5 px-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl text-sm font-medium flex items-center justify-center gap-2 premium-transition"
+              >
+                <Download className="w-4 h-4" /> Resolusi Asli
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDownloadIndividualMedia(selectedMediaForEdit.id, 'preview', selectedMediaForEdit.original_filename)}
+                className="flex-1 py-2.5 px-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl text-sm font-medium flex items-center justify-center gap-2 premium-transition"
+              >
+                <Download className="w-4 h-4" /> Versi Preview
+              </button>
+            </div>
+
             <form onSubmit={handleEditMediaSubmit} className="space-y-4">
               <div>
                 <label className="text-sm font-semibold text-gray-700 mb-1.5 block">Nama File</label>
@@ -1241,14 +1427,42 @@ export default function ActivityDetailPage() {
               </div>
 
               <div className="flex justify-between pt-4 items-center">
-                <button
-                  type="button"
-                  onClick={handleDeleteMedia}
-                  className="px-4 py-2.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl font-medium text-sm transition-colors flex items-center gap-2"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Hapus Media
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDeleteMedia}
+                    className="px-3 py-2.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl font-medium text-sm transition-colors flex items-center gap-2"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Hapus
+                  </button>
+
+                  <div className="relative group/download">
+                    <button
+                      type="button"
+                      className="px-3 py-2.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium text-sm transition-colors flex items-center gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      Unduh
+                    </button>
+                    <div className="absolute bottom-full left-0 mb-2 w-40 bg-white border border-gray-100 shadow-xl rounded-xl p-1.5 opacity-0 invisible group-hover/download:opacity-100 group-hover/download:visible transition-all duration-200 z-10">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadIndividualMedia(selectedMediaForEdit!.id, 'original', selectedMediaForEdit!.original_filename)}
+                        className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-lg"
+                      >
+                        Kualitas Asli
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadIndividualMedia(selectedMediaForEdit!.id, 'preview', selectedMediaForEdit!.original_filename)}
+                        className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-lg"
+                      >
+                        Pratinjau (WebP)
+                      </button>
+                    </div>
+                  </div>
+                </div>
                 
                 <div className="flex gap-2">
                   <button
@@ -1310,14 +1524,59 @@ export default function ActivityDetailPage() {
                         <Paperclip className="w-5 h-5 text-primary-600" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-gray-900 truncate">
-                          {att.display_name || att.original_filename}
-                        </p>
-                        <p className="text-xs text-text-muted">
+                        {editingAttachmentId === att.id ? (
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <input 
+                              type="text" 
+                              value={editAttachmentName} 
+                              onChange={(e) => setEditAttachmentName(e.target.value)} 
+                              className="w-full text-sm font-semibold text-gray-900 border border-primary-300 rounded px-2 py-0.5 outline-none focus:ring-1 focus:ring-primary-500"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  handleRenameAttachment(att.id, editAttachmentName);
+                                  setEditingAttachmentId(null);
+                                } else if (e.key === 'Escape') {
+                                  setEditingAttachmentId(null);
+                                }
+                              }}
+                            />
+                            <button 
+                              onClick={() => {
+                                handleRenameAttachment(att.id, editAttachmentName);
+                                setEditingAttachmentId(null);
+                              }}
+                              className="p-1 text-green-600 hover:bg-green-50 rounded"
+                            >
+                              <CheckCircle className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={() => setEditingAttachmentId(null)}
+                              className="p-1 text-red-600 hover:bg-red-50 rounded"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="text-sm font-semibold text-gray-900 truncate">
+                            {att.display_name || att.original_filename}
+                          </p>
+                        )}
+                        <p className="text-xs text-text-muted mt-0.5">
                           {(att.file_size_bytes / 1024 / 1024).toFixed(2)} MB • {att.uploaded_by_name || 'System'}
                         </p>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
+                        <button 
+                          onClick={() => {
+                            setEditingAttachmentId(att.id);
+                            setEditAttachmentName(att.display_name || att.original_filename);
+                          }}
+                          className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          title="Ubah Nama Lampiran"
+                        >
+                          <PencilSimple className="w-4 h-4" />
+                        </button>
                         <button 
                           onClick={() => handleDownloadAttachment(att.id, att.display_name || att.original_filename)}
                           className="p-2 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"

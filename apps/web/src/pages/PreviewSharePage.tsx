@@ -10,7 +10,7 @@ export default function PreviewSharePage() {
     if (raw) {
       try {
         setData(JSON.parse(raw));
-      } catch (e) {
+      } catch {
         console.error('Failed to parse preview data');
       }
     }

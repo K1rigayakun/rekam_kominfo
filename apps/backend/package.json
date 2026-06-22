@@ -12,15 +12,16 @@
     "db:seed:sample": "tsx src/seeds/sample.ts",
     "db:reset": "tsx src/migrations/reset.ts",
     "db:check": "tsx src/migrations/check.ts",
-    "queue:dashboard": "tsx src/queues/dashboard.ts",
     "queue:media": "tsx src/queues/media_processor.ts",
-    "queue:integrity": "tsx src/queues/integrity_checker.ts"
+    "queue:integrity": "tsx src/queues/integrity_checker.ts",
+    "queue:export": "tsx src/queues/export_processor.ts"
   },
   "dependencies": {
     "@bull-board/api": "^6.6.0",
     "@bull-board/fastify": "^6.6.0",
     "@fastify/cookie": "^11.0.0",
     "@fastify/cors": "^11.0.0",
+    "@fastify/helmet": "^13.0.2",
     "@fastify/jwt": "^9.0.0",
     "@fastify/multipart": "^9.0.0",
     "@fastify/rate-limit": "^10.2.0",

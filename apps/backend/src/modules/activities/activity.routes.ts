@@ -43,6 +43,53 @@ const listQuerySchema = z.object({
 export async function activityRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
 
+  function activityAccessCondition(alias: string, userIdParam: number, districtIdParam: number) {
+    return `(
+      ${alias}.created_by = $${userIdParam}
+      OR (${alias}.district_id IS NOT NULL AND ${alias}.district_id = $${districtIdParam})
+      OR EXISTS (
+        SELECT 1 FROM team_members tm
+        WHERE tm.team_id = ${alias}.team_id
+          AND tm.user_id = $${userIdParam}
+      )
+    )`;
+  }
+
+  async function canAccessActivity(activityId: string, user: NonNullable<FastifyRequest['currentUser']>) {
+    if (user.role === 'SUPER_ADMIN') return true;
+
+    const { rowCount } = await fastify.db.query(
+      `SELECT 1
+       FROM activities a
+       WHERE a.id = $1
+         AND ${activityAccessCondition('a', 2, 3)}
+       LIMIT 1`,
+      [activityId, user.id, user.district_id]
+    );
+
+    return Number(rowCount) > 0;
+  }
+
+  async function canUseTeam(teamId: string | undefined, user: NonNullable<FastifyRequest['currentUser']>) {
+    if (!teamId || user.role === 'SUPER_ADMIN') return true;
+
+    const { rowCount } = await fastify.db.query(
+      'SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2 LIMIT 1',
+      [teamId, user.id]
+    );
+
+    return Number(rowCount) > 0;
+  }
+
+  async function removeMinioObject(bucket: string, key: string | null | undefined) {
+    if (!key) return;
+    try {
+      await fastify.minio.removeObject(bucket, key);
+    } catch (err) {
+      fastify.log.warn({ err, bucket, key }, 'Gagal menghapus object MinIO saat hard delete acara');
+    }
+  }
+
   // ─── GET /api/activities ───────────────────
   fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
     const query = listQuerySchema.parse(request.query);
@@ -54,12 +101,16 @@ export async function activityRoutes(fastify: FastifyInstance) {
     let paramIndex = 2;
 
     // Filter berdasarkan team
-    // TODO: Untuk user biasa, pastikan hanya fetch activities dari team_ids mereka
-    // Saat ini, query.team_id dipakai untuk filter spesifik
     if (query.team_id) {
       whereClause += ` AND a.team_id = $${paramIndex}`;
       params.push(query.team_id);
       paramIndex++;
+    }
+
+    if (user.role !== 'SUPER_ADMIN') {
+      whereClause += ` AND ${activityAccessCondition('a', paramIndex, paramIndex + 1)}`;
+      params.push(user.id, user.district_id);
+      paramIndex += 2;
     }
 
     if (query.district_id) {
@@ -68,10 +119,13 @@ export async function activityRoutes(fastify: FastifyInstance) {
       paramIndex++;
     }
 
-    // Full-text search jika tersedia, fallback ke ILIKE
+    let orderBy = 'ORDER BY a.event_date DESC NULLS LAST, a.created_at DESC';
+
+    // Full-text search jika tersedia, fallback ke ILIKE diganti ke FTS tsvector
     if (query.search) {
-      whereClause += ` AND (a.title ILIKE $${paramIndex} OR a.location ILIKE $${paramIndex})`;
-      params.push(`%${query.search}%`);
+      whereClause += ` AND a.search_vector @@ plainto_tsquery('simple', $${paramIndex})`;
+      orderBy = `ORDER BY ts_rank(a.search_vector, plainto_tsquery('simple', $${paramIndex})) DESC, a.event_date DESC NULLS LAST`;
+      params.push(query.search);
       paramIndex++;
     }
 
@@ -123,7 +177,7 @@ export async function activityRoutes(fastify: FastifyInstance) {
        LEFT JOIN users u ON u.id = a.created_by
        LEFT JOIN districts d ON d.id = a.district_id
        ${whereClause}
-       ORDER BY a.event_date DESC NULLS LAST, a.created_at DESC
+       ${orderBy}
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, query.limit, offset]
     );
@@ -142,6 +196,7 @@ export async function activityRoutes(fastify: FastifyInstance) {
   // ─── GET /api/activities/:id ───────────────
   fastify.get('/:id', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     const { id } = request.params;
+    const user = request.currentUser!;
 
     const { rows } = await fastify.db.query(
       `SELECT a.*, t.name as team_name, u.full_name as created_by_name, d.name as district_name
@@ -155,6 +210,10 @@ export async function activityRoutes(fastify: FastifyInstance) {
 
     if (rows.length === 0) {
       return reply.status(404).send({ error: 'Acara tidak ditemukan' });
+    }
+
+    if (!(await canAccessActivity(id, user))) {
+      return reply.status(403).send({ error: 'Akses acara ditolak' });
     }
 
     // Ambil sections + media count per section
@@ -209,6 +268,14 @@ export async function activityRoutes(fastify: FastifyInstance) {
 
       const teamId = body.team_id;
       const districtId = body.district_id || user.district_id || null;
+
+      if (user.role !== 'SUPER_ADMIN' && body.district_id && body.district_id !== user.district_id) {
+        return reply.status(403).send({ error: 'Editor hanya boleh membuat acara untuk kecamatan sendiri' });
+      }
+
+      if (!(await canUseTeam(teamId, user))) {
+        return reply.status(403).send({ error: 'Editor hanya boleh memilih tim yang dia ikuti' });
+      }
 
       const { rows } = await fastify.db.query(
         `INSERT INTO activities (title, description, description_json, event_date, event_end_date, location, use_sections, team_id, district_id, created_by)
@@ -272,6 +339,14 @@ export async function activityRoutes(fastify: FastifyInstance) {
 
       if (existing.length === 0) {
         return reply.status(404).send({ error: 'Acara tidak ditemukan' });
+      }
+
+      if (!(await canAccessActivity(id, user))) {
+        return reply.status(403).send({ error: 'Akses acara ditolak' });
+      }
+
+      if (user.role !== 'SUPER_ADMIN' && body.district_id && body.district_id !== user.district_id) {
+        return reply.status(403).send({ error: 'Editor hanya boleh memindahkan acara ke kecamatan sendiri' });
       }
 
       // Build dynamic update query
@@ -344,14 +419,65 @@ export async function activityRoutes(fastify: FastifyInstance) {
   // ─── DELETE /api/activities/:id (soft delete) ─
   fastify.delete<{ Params: { id: string } }>(
     '/:id',
-    { preHandler: [fastify.authenticate, fastify.requireSuperAdmin] },
+    { preHandler: [fastify.requireEditor] },
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const { id } = request.params;
       const user = request.currentUser!;
       const hardDelete = (request.query as any).hard === 'true';
 
+      const { rowCount: activityExists } = await fastify.db.query(
+        'SELECT 1 FROM activities WHERE id = $1 LIMIT 1',
+        [id]
+      );
+      if (Number(activityExists) === 0) {
+        return reply.status(404).send({ error: 'Acara tidak ditemukan' });
+      }
+
+      if (hardDelete && user.role !== 'SUPER_ADMIN') {
+        return reply.status(403).send({ error: 'Hard delete hanya dapat dilakukan SUPER_ADMIN' });
+      }
+
+      if (!hardDelete && !(await canAccessActivity(id, user))) {
+        return reply.status(403).send({ error: 'Akses acara ditolak' });
+      }
+
       if (hardDelete) {
-        // Hard delete — hanya SUPER_ADMIN
+        const { rows: mediaRows } = await fastify.db.query(
+          `SELECT storage_key_raw, storage_key_processed, storage_key_thumbnail, quality_variants
+           FROM media_files
+           WHERE activity_id = $1`,
+          [id]
+        );
+        const { rows: attachmentRows } = await fastify.db.query(
+          `SELECT storage_key FROM event_attachments WHERE activity_id = $1`,
+          [id]
+        );
+        const { rows: exportRows } = await fastify.db.query(
+          `SELECT storage_key FROM export_jobs WHERE entity_id = $1`,
+          [id]
+        );
+
+        for (const media of mediaRows) {
+          await removeMinioObject(fastify.minioBuckets.raw, media.storage_key_raw);
+          await removeMinioObject(fastify.minioBuckets.processed, media.storage_key_processed);
+          await removeMinioObject(fastify.minioBuckets.processed, media.storage_key_thumbnail);
+
+          const variants = media.quality_variants || {};
+          for (const key of Object.values(variants)) {
+            if (typeof key === 'string') {
+              await removeMinioObject(fastify.minioBuckets.processed, key);
+            }
+          }
+        }
+
+        for (const attachment of attachmentRows) {
+          await removeMinioObject(fastify.minioBuckets.attach, attachment.storage_key);
+        }
+
+        for (const exportJob of exportRows) {
+          await removeMinioObject(fastify.minioBuckets.exports, exportJob.storage_key);
+        }
+
         const { rowCount } = await fastify.db.query('DELETE FROM activities WHERE id = $1', [id]);
         if (rowCount === 0) {
           return reply.status(404).send({ error: 'Acara tidak ditemukan' });
@@ -378,45 +504,4 @@ export async function activityRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // ─── GET /api/activities/:id/export/zip ──────
-  fastify.get<{ Params: { id: string } }>(
-    '/:id/export/zip',
-    { preHandler: [fastify.authenticate, fastify.requireSuperAdmin] },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      const { id } = request.params;
-
-      const { rows: activity } = await fastify.db.query('SELECT title FROM activities WHERE id = $1', [id]);
-      if (activity.length === 0) return reply.status(404).send({ error: 'Acara tidak ditemukan' });
-
-      const { rows: mediaFiles } = await fastify.db.query(
-        'SELECT storage_key_raw, original_filename FROM media_files WHERE activity_id = $1',
-        [id]
-      );
-
-      if (mediaFiles.length === 0) return reply.status(400).send({ error: 'Tidak ada media untuk diekspor' });
-
-      const archiver = require('archiver');
-      const archive = archiver('zip', { zlib: { level: 5 } }); // Level 5 for speed vs compression balance
-
-      reply.header('Content-Type', 'application/zip');
-      const safeTitle = activity[0].title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-      reply.header('Content-Disposition', `attachment; filename="${safeTitle}_export.zip"`);
-
-      archive.pipe(reply.raw);
-
-      for (const media of mediaFiles) {
-        if (!media.storage_key_raw) continue;
-        try {
-          // getObject returns a stream from MinIO
-          const fileStream = await fastify.minio.getObject(fastify.minioBuckets.raw, media.storage_key_raw);
-          archive.append(fileStream, { name: media.original_filename || media.storage_key_raw });
-        } catch (err) {
-          fastify.log.warn(`Failed to fetch media from MinIO: ${media.storage_key_raw}`);
-        }
-      }
-
-      await archive.finalize();
-      return reply; 
-    }
-  );
 }

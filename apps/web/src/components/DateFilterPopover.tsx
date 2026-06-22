@@ -59,7 +59,7 @@ export default function DateFilterPopover({ filterState, onChange }: DateFilterP
   const getDisplayText = () => {
     // If Custom is active
     if (filterDay || filterMonth || filterYear) {
-      let parts = [];
+      const parts: string[] = [];
       if (filterDay) parts.push(`Tgl ${filterDay}`);
       if (filterMonth) parts.push(`Bln ${filterMonth}`);
       if (filterYear) parts.push(`Thn ${filterYear}`);

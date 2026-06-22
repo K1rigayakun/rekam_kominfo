@@ -7,6 +7,93 @@ import { createHash } from 'crypto';
  * Diakses oleh siapa pun yang memiliki token dari QR code.
  */
 export async function publicRoutes(fastify: FastifyInstance) {
+  function getQualityVariant(qualityVariants: any, quality: string) {
+    if (!qualityVariants) return null;
+    let variants = qualityVariants;
+    if (typeof qualityVariants === 'string') {
+      try {
+        variants = JSON.parse(qualityVariants);
+      } catch {
+        return null;
+      }
+    }
+    return variants?.[quality] || null;
+  }
+
+  function resolveDownloadTarget(file: any, quality: string) {
+    if (quality === 'preview') {
+      return {
+        bucket: fastify.minioBuckets.processed,
+        key: file.storage_key_processed,
+        contentType: file.media_type === 'VIDEO' ? 'video/mp4' : 'image/webp',
+      };
+    }
+
+    if (['360p', '480p', '720p', '1080p'].includes(quality)) {
+      return {
+        bucket: fastify.minioBuckets.processed,
+        key: getQualityVariant(file.quality_variants, quality),
+        contentType: 'video/mp4',
+      };
+    }
+
+    return {
+      bucket: fastify.minioBuckets.raw,
+      key: file.storage_key_raw,
+      contentType: file.mime_type,
+    };
+  }
+
+  function applyDefaultPublicQuality(downloadQuality: string, requestedQuality?: string) {
+    if (requestedQuality) return requestedQuality;
+    return downloadQuality === 'PREVIEW' ? 'preview' : 'original';
+  }
+
+  function isPublicQualityAllowed(downloadQuality: string, quality: string) {
+    if (downloadQuality === 'BOTH') return true;
+    if (downloadQuality === 'ORIGINAL') return quality === 'original';
+    if (downloadQuality === 'PREVIEW') return quality !== 'original';
+    return false;
+  }
+
+  function parseByteRange(rangeHeader: string | string[] | undefined, fileSize: number) {
+    const range = Array.isArray(rangeHeader) ? rangeHeader[0] : rangeHeader;
+    if (!range) return { valid: true, range: null };
+
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (!match || (!match[1] && !match[2])) {
+      return { valid: false, range: null };
+    }
+
+    let start: number;
+    let end: number;
+
+    if (!match[1]) {
+      const suffixLength = Number(match[2]);
+      if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+        return { valid: false, range: null };
+      }
+      start = Math.max(fileSize - suffixLength, 0);
+      end = fileSize - 1;
+    } else {
+      start = Number(match[1]);
+      end = match[2] ? Number(match[2]) : fileSize - 1;
+    }
+
+    if (
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      start < 0 ||
+      end < start ||
+      start >= fileSize
+    ) {
+      return { valid: false, range: null };
+    }
+
+    end = Math.min(end, fileSize - 1);
+    return { valid: true, range: { start, end, length: end - start + 1 } };
+  }
+
   // ─── GET /p/:token/info ────────────────────
   // Mendapatkan info snapshot (tanpa file, hanya metadata)
   fastify.get('/:token/info', async (request: FastifyRequest<{ Params: { token: string } }>, reply: FastifyReply) => {
@@ -135,7 +222,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
       reply: FastifyReply
     ) => {
       const { token, mediaId } = request.params;
-      const quality = (request.query as any).quality || 'original';
+      const requestedQuality = (request.query as any).quality as string | undefined;
 
       // Verifikasi snapshot aktif
       const { rows: snapshot } = await fastify.db.query(
@@ -145,6 +232,15 @@ export async function publicRoutes(fastify: FastifyInstance) {
 
       if (snapshot.length === 0 || !snapshot[0].is_active) {
         return reply.status(404).send({ error: 'Link tidak ditemukan' });
+      }
+
+      if (snapshot[0].expires_at && new Date(snapshot[0].expires_at) < new Date()) {
+        return reply.status(410).send({ error: 'Link ini sudah kedaluwarsa' });
+      }
+
+      const quality = applyDefaultPublicQuality(snapshot[0].download_quality, requestedQuality);
+      if (!isPublicQualityAllowed(snapshot[0].download_quality, quality)) {
+        return reply.status(403).send({ error: 'Kualitas download ini tidak diizinkan untuk link publik' });
       }
 
       // Cek apakah media ini termasuk dalam snapshot
@@ -168,16 +264,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
       }
 
       const file = media[0];
-      let bucket = fastify.minioBuckets.raw;
-      let key = file.storage_key_raw;
-
-      if (quality === 'preview') {
-        bucket = fastify.minioBuckets.processed;
-        key = file.storage_key_processed;
-      } else if (quality === '360p' || quality === '720p' || quality === '1080p') {
-        bucket = fastify.minioBuckets.processed;
-        key = file.quality_variants && file.quality_variants[quality] ? file.quality_variants[quality] : null;
-      }
+      const { bucket, key, contentType } = resolveDownloadTarget(file, quality);
 
       if (!key) {
         return reply.status(404).send({ error: 'File resolusi tersebut tidak tersedia' });
@@ -186,29 +273,31 @@ export async function publicRoutes(fastify: FastifyInstance) {
       const stat = await fastify.minio.statObject(bucket, key);
       const fileSize = stat.size;
 
-      const contentType = quality === 'original' ? file.mime_type : (file.media_type === 'VIDEO' ? 'video/mp4' : 'image/webp');
       reply.header('Content-Type', contentType);
       reply.header(
         'Content-Disposition',
         `attachment; filename="${file.display_name || file.original_filename}"`
       );
 
-      const range = request.headers.range;
       let stream;
+      const parsedRange = parseByteRange(request.headers.range, fileSize);
 
-      if (range) {
-        const parts = range.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-        const chunksize = (end - start) + 1;
+      if (!parsedRange.valid) {
+        return reply
+          .status(416)
+          .header('Content-Range', `bytes */${fileSize}`)
+          .send({ error: 'Range tidak valid' });
+      }
 
+      if (parsedRange.range) {
         reply.code(206);
-        reply.header('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+        reply.header('Content-Range', `bytes ${parsedRange.range.start}-${parsedRange.range.end}/${fileSize}`);
         reply.header('Accept-Ranges', 'bytes');
-        reply.header('Content-Length', chunksize);
+        reply.header('Content-Length', parsedRange.range.length);
 
-        stream = await fastify.minio.getPartialObject(bucket, key, start, chunksize);
+        stream = await fastify.minio.getPartialObject(bucket, key, parsedRange.range.start, parsedRange.range.length);
       } else {
+        reply.header('Accept-Ranges', 'bytes');
         reply.header('Content-Length', fileSize);
         stream = await fastify.minio.getObject(bucket, key);
       }
@@ -217,7 +306,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
       await fastify.db.query(
         `INSERT INTO audit_logs (action, entity_type, entity_id, details, ip_address)
          VALUES ('DOWNLOAD', 'media_file', $1, $2, $3)`,
-        [mediaId, JSON.stringify({ via: 'public', token, range: !!range }), request.ip]
+        [mediaId, JSON.stringify({ via: 'public', token, range: Boolean(parsedRange.range) }), request.ip]
       );
 
       return reply.send(stream);
@@ -230,11 +319,15 @@ export async function publicRoutes(fastify: FastifyInstance) {
     const { token } = request.params;
 
     const { rows: snapshot } = await fastify.db.query(
-      'SELECT id, activity_id, is_active, config FROM sharing_snapshots WHERE token = $1',
+      'SELECT id, activity_id, is_active, expires_at, config FROM sharing_snapshots WHERE token = $1',
       [token]
     );
 
     if (snapshot.length === 0 || !snapshot[0].is_active) {
+      return reply.send({ data: [] });
+    }
+
+    if (snapshot[0].expires_at && new Date(snapshot[0].expires_at) < new Date()) {
       return reply.send({ data: [] });
     }
 
@@ -245,13 +338,19 @@ export async function publicRoutes(fastify: FastifyInstance) {
 
     const { rows } = await fastify.db.query(
       `SELECT id, original_filename, display_name, file_size_bytes 
-       FROM attachments 
+       FROM event_attachments 
        WHERE activity_id = $1
        ORDER BY created_at ASC`,
       [snapshot[0].activity_id]
     );
 
-    return reply.send({ data: rows });
+    // Filter by allowed_attachment_ids if it exists
+    let finalRows = rows;
+    if (Array.isArray(config.allowed_attachment_ids) && config.allowed_attachment_ids.length > 0) {
+      finalRows = rows.filter((r: any) => config.allowed_attachment_ids.includes(r.id));
+    }
+
+    return reply.send({ data: finalRows });
   });
 
   // ─── GET /p/:token/attachments/:id/download 
@@ -260,7 +359,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
     const { token, id } = request.params;
 
     const { rows: snapshot } = await fastify.db.query(
-      'SELECT activity_id, is_active, config FROM sharing_snapshots WHERE token = $1',
+      'SELECT activity_id, is_active, expires_at, config FROM sharing_snapshots WHERE token = $1',
       [token]
     );
 
@@ -268,13 +367,23 @@ export async function publicRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Link tidak ditemukan' });
     }
 
+    if (snapshot[0].expires_at && new Date(snapshot[0].expires_at) < new Date()) {
+      return reply.status(410).send({ error: 'Link ini sudah kedaluwarsa' });
+    }
+
     const config = snapshot[0].config || {};
     if (!config.share_attachments) {
       return reply.status(403).send({ error: 'Lampiran tidak dibagikan' });
     }
 
+    if (Array.isArray(config.allowed_attachment_ids) && config.allowed_attachment_ids.length > 0) {
+      if (!config.allowed_attachment_ids.includes(id)) {
+        return reply.status(403).send({ error: 'Lampiran ini tidak dibagikan' });
+      }
+    }
+
     const { rows: attachments } = await fastify.db.query(
-      'SELECT * FROM attachments WHERE id = $1 AND activity_id = $2',
+      'SELECT * FROM event_attachments WHERE id = $1 AND activity_id = $2',
       [id, snapshot[0].activity_id]
     );
 
@@ -284,7 +393,7 @@ export async function publicRoutes(fastify: FastifyInstance) {
 
     const file = attachments[0];
     const stream = await fastify.minio.getObject(
-      process.env.MINIO_BUCKET_ATTACH || 'rekam-attach',
+      fastify.minioBuckets.attach,
       file.storage_key
     );
 
@@ -307,11 +416,11 @@ export async function publicRoutes(fastify: FastifyInstance) {
   // ─── GET /p/:token/download-all/zip ─────────
   fastify.get('/:token/download-all/zip', async (request: FastifyRequest<{ Params: { token: string }; Querystring: { quality?: string } }>, reply: FastifyReply) => {
     const { token } = request.params;
-    const quality = (request.query as any).quality || 'original';
+    const requestedQuality = (request.query as any).quality as string | undefined;
 
     // Verifikasi snapshot aktif
     const { rows: snapshot } = await fastify.db.query(
-      `SELECT ss.id, ss.title, ss.download_quality, ss.is_active, 
+      `SELECT ss.id, ss.title, ss.download_quality, ss.is_active, ss.expires_at,
               a.title as activity_title, a.event_date
        FROM sharing_snapshots ss
        JOIN activities a ON a.id = ss.activity_id
@@ -324,65 +433,97 @@ export async function publicRoutes(fastify: FastifyInstance) {
     }
 
     const snap = snapshot[0];
-    const safeTitle = (snap.title || snap.activity_title).replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    const dateStr = snap.event_date ? new Date(snap.event_date).toISOString().split('T')[0] : 'undated';
-    const zipFilename = `REKAM_${safeTitle}_${dateStr}.zip`;
+    if (snap.expires_at && new Date(snap.expires_at) < new Date()) {
+      return reply.status(410).send({ error: 'Link ini sudah kedaluwarsa' });
+    }
 
-    // Ambil media dalam snapshot
-    const { rows: items } = await fastify.db.query(
-      `SELECT mf.id, mf.original_filename, mf.display_name, mf.media_type,
-              mf.storage_key_raw, mf.storage_key_processed, mf.quality_variants,
-              es.title as section_title
-       FROM sharing_snapshot_items ssi
-       JOIN media_files mf ON mf.id = ssi.media_id
-       LEFT JOIN event_sections es ON es.id = mf.section_id
-       WHERE ssi.snapshot_id = $1
-       ORDER BY es.sort_order, mf.sort_order`,
-      [snap.id]
+    const quality = applyDefaultPublicQuality(snap.download_quality, requestedQuality);
+    if (!isPublicQualityAllowed(snap.download_quality, quality)) {
+      return reply.status(403).send({ error: 'Kualitas download ini tidak diizinkan untuk link publik' });
+    }
+
+    // 1. Buat record export_job
+    const entityType = quality === 'preview' ? 'public_zip_preview' : 'public_zip_original';
+    
+    const { rows: jobs } = await fastify.db.query(
+      `INSERT INTO export_jobs (user_id, entity_type, entity_id, expires_at)
+       VALUES (NULL, $1, $2, NOW() + INTERVAL '24 hours') RETURNING id`,
+      [entityType, snap.id]
     );
 
-    if (items.length === 0) {
-      return reply.status(400).send({ error: 'Tidak ada media untuk didownload' });
-    }
+    const jobId = jobs[0].id;
 
-    reply.header('Content-Type', 'application/zip');
-    reply.header('Content-Disposition', `attachment; filename="${zipFilename}"`);
+    // 2. Masukkan ke queue
+    await fastify.exportQueue.add('export-zip', {
+      jobId,
+      entityType,
+      entityId: snap.id,
+      quality,
+      token
+    });
 
-    // @ts-ignore
-    const archive = archiver('zip', { zlib: { level: 5 } });
-    archive.pipe(reply.raw);
-
-    for (const media of items) {
-      let bucket = fastify.minioBuckets.raw;
-      let key = media.storage_key_raw;
-
-      if (quality === 'preview') {
-        bucket = fastify.minioBuckets.processed;
-        key = media.storage_key_processed;
-      } else if (quality === '360p' || quality === '720p' || quality === '1080p') {
-        bucket = fastify.minioBuckets.processed;
-        key = media.quality_variants && media.quality_variants[quality] ? media.quality_variants[quality] : null;
-      }
-
-      if (!key) continue;
-
-      try {
-        const stream = await fastify.minio.getObject(bucket, key);
-        const folderName = media.section_title ? media.section_title.replace(/[^a-z0-9_]/gi, '_') : 'Media';
-        const fileName = media.display_name || media.original_filename;
-        archive.append(stream, { name: `${folderName}/${fileName}` });
-      } catch (err) {
-        console.error(`Error adding ${key} to zip:`, err);
-      }
-    }
-
-    // Log audit
+    // 3. Log export request
     await fastify.db.query(
       `INSERT INTO audit_logs (action, entity_type, entity_id, details, ip_address)
        VALUES ('EXPORT', 'snapshot', $1, $2, $3)`,
-      [snap.id, JSON.stringify({ type: 'ZIP', via: 'public', token, quality }), request.ip]
+      [snap.id, JSON.stringify({ type: 'ZIP_REQUEST', via: 'public', token, quality }), request.ip]
     );
 
-    await archive.finalize();
+    return reply.status(202).send({ message: 'Proses ekspor ZIP dimulai', job_id: jobId });
+  });
+
+  // ─── GET /p/:token/export-jobs/:jobId ────────
+  fastify.get('/:token/export-jobs/:jobId', async (request: FastifyRequest<{ Params: { token: string; jobId: string } }>, reply: FastifyReply) => {
+    const { token, jobId } = request.params;
+    
+    const { rows: snapshot } = await fastify.db.query('SELECT id, is_active FROM sharing_snapshots WHERE token = $1', [token]);
+    if (snapshot.length === 0 || !snapshot[0].is_active) {
+      return reply.status(404).send({ error: 'Link tidak ditemukan' });
+    }
+
+    const { rows: jobs } = await fastify.db.query(
+      `SELECT status, error_message FROM export_jobs WHERE id = $1 AND entity_id = $2`,
+      [jobId, snapshot[0].id]
+    );
+
+    if (jobs.length === 0) return reply.status(404).send({ error: 'Job tidak ditemukan' });
+
+    return reply.send(jobs[0]);
+  });
+
+  // ─── GET /p/:token/export-jobs/:jobId/download 
+  fastify.get('/:token/export-jobs/:jobId/download', async (request: FastifyRequest<{ Params: { token: string; jobId: string } }>, reply: FastifyReply) => {
+    const { token, jobId } = request.params;
+
+    const { rows: snapshot } = await fastify.db.query('SELECT id, is_active FROM sharing_snapshots WHERE token = $1', [token]);
+    if (snapshot.length === 0 || !snapshot[0].is_active) return reply.status(404).send({ error: 'Link tidak ditemukan' });
+
+    const { rows: jobs } = await fastify.db.query(
+      `SELECT status, storage_key, file_name, entity_type FROM export_jobs WHERE id = $1 AND entity_id = $2`,
+      [jobId, snapshot[0].id]
+    );
+
+    if (jobs.length === 0) return reply.status(404).send({ error: 'Job tidak ditemukan' });
+
+    const job = jobs[0];
+    if (job.status !== 'COMPLETED' || !job.storage_key) {
+      return reply.status(400).send({ error: 'File export belum siap atau gagal diproses' });
+    }
+
+    try {
+      const stream = await fastify.minio.getObject(fastify.minioBuckets.exports, job.storage_key);
+      reply.header('Content-Type', 'application/zip');
+      reply.header('Content-Disposition', `attachment; filename="${job.file_name}"`);
+      
+      await fastify.db.query(
+        `INSERT INTO audit_logs (action, entity_type, entity_id, details, ip_address)
+         VALUES ('DOWNLOAD', $1, $2, $3, $4)`,
+        [job.entity_type, snapshot[0].id, JSON.stringify({ via: 'public', token, jobId }), request.ip]
+      );
+
+      return reply.send(stream);
+    } catch (err: any) {
+      return reply.status(500).send({ error: 'Gagal mengambil file export' });
+    }
   });
 }

@@ -28,7 +28,7 @@ export default function ActivityVersionsPage() {
       try {
         const res = await api.get(`/api/activities/${id}/versions`);
         setVersions(res.data.data);
-      } catch (error) {
+      } catch {
         toast.error('Gagal memuat riwayat versi');
       } finally {
         setLoading(false);

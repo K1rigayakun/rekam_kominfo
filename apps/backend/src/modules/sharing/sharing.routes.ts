@@ -19,6 +19,7 @@ const createSnapshotSchema = z.object({
 
 export async function sharingRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', fastify.requireSuperAdmin);
 
   // ─── GET /api/sharing?activity_id=... ──────
   fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {

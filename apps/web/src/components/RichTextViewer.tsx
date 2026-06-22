@@ -1,6 +1,7 @@
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
+import DOMPurify from 'dompurify';
 
 interface RichTextViewerProps {
   content?: any; // TipTap JSON or HTML string
@@ -8,6 +9,9 @@ interface RichTextViewerProps {
 }
 
 export default function RichTextViewer({ content, className = '' }: RichTextViewerProps) {
+  // Sanitize if content is string (HTML)
+  const safeContent = typeof content === 'string' ? DOMPurify.sanitize(content) : content;
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -22,7 +26,7 @@ export default function RichTextViewer({ content, className = '' }: RichTextView
         },
       }),
     ],
-    content: content || '',
+    content: safeContent || '',
     editable: false,
   });
 

@@ -6,6 +6,9 @@ apps/*/node_modules/
 dist/
 apps/*/dist/
 coverage/
+*.tsbuildinfo
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
 
 # Environment and secrets
 .env

@@ -130,7 +130,7 @@ flowchart TB
   Phone --> ApiDev
 ```
 
-## Future Desktop Offload Target
+## Desktop Offload Client
 
 ```mermaid
 classDiagram
@@ -138,27 +138,18 @@ classDiagram
     +scanDrives()
     +detectDcimFolders()
   }
-  class RobocopyOffloadService {
-    +copyToStaging(source, target)
-    +verifyFileSize()
-    +calculateSha256()
-  }
   class LocalUploadQueue {
     +enqueue(file)
     +resumePending()
     +markDone(fileId)
+    +updateProgress()
   }
   class TusUploader {
-    +initUpload()
-    +uploadChunks()
+    +startUpload()
     +resumeUpload()
-  }
-  class StagingCleaner {
-    +deleteAfterServerHashMatch()
+    +limitParallelUploads()
   }
 
-  CameraDriveDetector --> RobocopyOffloadService
-  RobocopyOffloadService --> LocalUploadQueue
+  CameraDriveDetector --> LocalUploadQueue
   LocalUploadQueue --> TusUploader
-  TusUploader --> StagingCleaner
 ```

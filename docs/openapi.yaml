@@ -242,6 +242,14 @@ paths:
               type: object
       responses:
         "201": { description: Media uploaded. }
+  /api/media/{id}/download:
+    get:
+      summary: Download individual media file
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: quality, in: query, schema: { type: string, enum: [preview, original] } }
+      responses:
+        "200": { description: Media stream. }
   /api/attachments/upload:
     post:
       summary: Upload event or section attachment

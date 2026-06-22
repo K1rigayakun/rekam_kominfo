@@ -1,9 +1,35 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import archiver from 'archiver';
 import PDFDocument from 'pdfkit';
 
 export async function exportRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
+
+  function activityAccessCondition(alias: string, userIdParam: number, districtIdParam: number) {
+    return `(
+      ${alias}.created_by = $${userIdParam}
+      OR (${alias}.district_id IS NOT NULL AND ${alias}.district_id = $${districtIdParam})
+      OR EXISTS (
+        SELECT 1 FROM team_members tm
+        WHERE tm.team_id = ${alias}.team_id
+          AND tm.user_id = $${userIdParam}
+      )
+    )`;
+  }
+
+  async function canAccessActivity(activityId: string, user: NonNullable<FastifyRequest['currentUser']>) {
+    if (user.role === 'SUPER_ADMIN') return true;
+
+    const { rowCount } = await fastify.db.query(
+      `SELECT 1
+       FROM activities a
+       WHERE a.id = $1
+         AND ${activityAccessCondition('a', 2, 3)}
+       LIMIT 1`,
+      [activityId, user.id, user.district_id]
+    );
+
+    return Number(rowCount) > 0;
+  }
 
   // ─── GET /api/export/activity/:id/zip ──────
   fastify.get('/activity/:id/zip', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
@@ -20,59 +46,35 @@ export async function exportRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Acara tidak ditemukan' });
     }
 
-    const activity = activities[0];
-    const safeTitle = activity.title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    const dateStr = activity.event_date ? new Date(activity.event_date).toISOString().split('T')[0] : 'undated';
-    const zipFilename = `REKAM_${safeTitle}_${dateStr}.zip`;
+    if (!(await canAccessActivity(id, user))) {
+      return reply.status(403).send({ error: 'Akses acara ditolak' });
+    }
 
-    // Ambil semua media (dengan info section)
-    const { rows: mediaList } = await fastify.db.query(
-      `SELECT mf.id, mf.original_filename, mf.storage_key_raw, mf.storage_key_processed, es.title as section_title
-       FROM media_files mf
-       LEFT JOIN event_sections es ON es.id = mf.section_id
-       WHERE mf.activity_id = $1
-       ORDER BY es.sort_order, mf.sort_order`,
-      [id]
+    // Buat record di export_jobs
+    const { rows: jobs } = await fastify.db.query(
+      `INSERT INTO export_jobs (user_id, entity_type, entity_id, expires_at)
+       VALUES ($1, 'activity_zip', $2, NOW() + INTERVAL '24 hours') RETURNING id`,
+      [user.id, id]
     );
 
-    if (mediaList.length === 0) {
-      return reply.status(400).send({ error: 'Tidak ada media untuk diexport' });
-    }
+    const jobId = jobs[0].id;
 
-    // Set headers untuk ZIP
-    reply.header('Content-Type', 'application/zip');
-    reply.header('Content-Disposition', `attachment; filename="${zipFilename}"`);
+    // Masukkan ke queue
+    await fastify.exportQueue.add('export-zip', {
+      jobId,
+      entityType: 'activity_zip',
+      entityId: id,
+      userId: user.id
+    });
 
-    // Inisialisasi Archiver
-    // @ts-ignore
-    const archive = archiver('zip', { zlib: { level: 5 } });
-    archive.pipe(reply.raw);
-
-    // Proses stream tiap file dari MinIO
-    for (const media of mediaList) {
-      const bucket = fastify.minioBuckets.raw;
-      const key = media.storage_key_raw;
-      
-      if (!key) continue;
-
-      try {
-        const stream = await fastify.minio.getObject(bucket, key);
-        const folderName = media.section_title ? media.section_title.replace(/[^a-z0-9]/gi, '_') : 'Lainnya';
-        archive.append(stream, { name: `${folderName}/${media.original_filename}` });
-      } catch (err) {
-        fastify.log.error(`Gagal stream file untuk export: ${key}`);
-      }
-    }
-
-    // Log export
+    // Log export request
     await fastify.db.query(
       `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address)
-       VALUES ($1, 'DOWNLOAD', 'activity_export_zip', $2, $3)`,
+       VALUES ($1, 'EXPORT', 'activity_export_zip', $2, $3)`,
       [user.id, id, request.ip]
     );
 
-    await archive.finalize();
-    return reply;
+    return reply.status(202).send({ message: 'Proses ekspor ZIP dimulai', job_id: jobId });
   });
 
   // ─── GET /api/export/activity/:id/pdf ──────
@@ -82,11 +84,7 @@ export async function exportRoutes(fastify: FastifyInstance) {
 
     // Cek apakah activity ada
     const { rows: activities } = await fastify.db.query(
-      `SELECT a.title, a.event_date, a.location, a.description, u.full_name as created_by_name, d.name as district_name
-       FROM activities a
-       LEFT JOIN users u ON u.id = a.created_by
-       LEFT JOIN districts d ON d.id = a.district_id
-       WHERE a.id = $1`,
+      `SELECT title FROM activities WHERE id = $1`,
       [id]
     );
 
@@ -94,139 +92,97 @@ export async function exportRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Acara tidak ditemukan' });
     }
 
-    const activity = activities[0];
-    const safeTitle = activity.title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    const dateStr = activity.event_date ? new Date(activity.event_date).toISOString().split('T')[0] : 'undated';
-    const pdfFilename = `REKAM_${safeTitle}_${dateStr}.pdf`;
+    if (!(await canAccessActivity(id, user))) {
+      return reply.status(403).send({ error: 'Akses acara ditolak' });
+    }
 
-    // Ambil semua media (dengan info section)
-    const { rows: mediaList } = await fastify.db.query(
-      `SELECT mf.original_filename, mf.media_type, mf.storage_key_thumbnail, es.title as section_title
-       FROM media_files mf
-       LEFT JOIN event_sections es ON es.id = mf.section_id
-       WHERE mf.activity_id = $1
-       ORDER BY es.sort_order, mf.sort_order`,
-      [id]
+    // Buat record di export_jobs
+    const { rows: jobs } = await fastify.db.query(
+      `INSERT INTO export_jobs (user_id, entity_type, entity_id, expires_at)
+       VALUES ($1, 'activity_pdf', $2, NOW() + INTERVAL '24 hours') RETURNING id`,
+      [user.id, id]
     );
 
-    reply.header('Content-Type', 'application/pdf');
-    reply.header('Content-Disposition', `attachment; filename="${pdfFilename}"`);
+    const jobId = jobs[0].id;
 
-    const doc = new PDFDocument({ margin: 50 });
-    doc.pipe(reply.raw);
+    // Masukkan ke queue
+    await fastify.exportQueue.add('export-pdf', {
+      jobId,
+      entityType: 'activity_pdf',
+      entityId: id,
+      userId: user.id
+    });
 
-    // Header Instansi
-    doc.fontSize(18).font('Helvetica-Bold').text('KEMENTERIAN KOMUNIKASI DAN INFORMATIKA', { align: 'center' });
-    doc.fontSize(12).font('Helvetica').text('Repositori Elektronik Kegiatan & Arsip Media (REKAM)', { align: 'center' });
-    doc.moveDown(2);
-
-    // Judul Acara
-    doc.fontSize(16).font('Helvetica-Bold').text(activity.title, { align: 'center' });
-    doc.moveDown(1.5);
-
-    // Metadata Acara
-    doc.fontSize(12).font('Helvetica-Bold').text('Detail Acara');
-    doc.font('Helvetica');
-    doc.text(`Tanggal: ${activity.event_date ? new Date(activity.event_date).toLocaleDateString('id-ID') : '-'}`);
-    doc.text(`Kecamatan: ${activity.district_name || '-'}`);
-    doc.text(`Lokasi: ${activity.location || '-'}`);
-    doc.text(`Dibuat oleh: ${activity.created_by_name || '-'}`);
-    doc.moveDown();
-
-    // Deskripsi
-    if (activity.description) {
-      doc.font('Helvetica-Bold').text('Deskripsi');
-      doc.font('Helvetica').text(activity.description);
-      doc.moveDown();
-    }
-
-    // Media List (Grid Thumbnail placeholder)
-    doc.font('Helvetica-Bold').text('Daftar Media Dokumentasi');
-    doc.moveDown(0.5);
-
-    if (mediaList.length === 0) {
-      doc.font('Helvetica').text('Tidak ada media yang diunggah untuk acara ini.');
-    } else {
-      let currentSection = '';
-      
-      const margin = 50;
-      const thumbWidth = 150;
-      const thumbHeight = 150;
-      const spacing = 20;
-      let startX = margin;
-      let startY = doc.y + 10;
-      let currentX = startX;
-      let currentY = startY;
-
-      for (const media of mediaList) {
-        const sectionTitle = media.section_title || 'Lainnya';
-        if (sectionTitle !== currentSection) {
-          currentSection = sectionTitle;
-          if (currentX !== startX) {
-             currentY += thumbHeight + spacing;
-             currentX = startX;
-          }
-          if (currentY > 700) { doc.addPage(); currentY = margin; }
-          
-          doc.moveDown(0.5);
-          doc.fontSize(11).font('Helvetica-Bold').text(`[Seksi] ${currentSection}`, startX, currentY);
-          currentY += 20;
-          if (currentY > 700) { doc.addPage(); currentY = margin; }
-        }
-
-        try {
-          if (media.storage_key_thumbnail) {
-            const stream = await fastify.minio.getObject(fastify.minioBuckets.processed, media.storage_key_thumbnail);
-            const chunks: any[] = [];
-            for await (const chunk of stream) chunks.push(chunk);
-            const buffer = Buffer.concat(chunks);
-            
-            // Draw thumbnail
-            doc.image(buffer, currentX, currentY, { width: thumbWidth, height: thumbHeight, fit: [thumbWidth, thumbHeight], align: 'center', valign: 'center' });
-            
-            // Draw filename text below
-            doc.fontSize(8).font('Helvetica').text(media.original_filename, currentX, currentY + thumbHeight + 5, { width: thumbWidth, align: 'center', lineBreak: false });
-            
-            currentX += thumbWidth + spacing;
-            if (currentX + thumbWidth > doc.page.width - margin) {
-              currentX = startX;
-              currentY += thumbHeight + 30 + spacing; // 30 is for text
-              if (currentY + thumbHeight > doc.page.height - margin) {
-                doc.addPage();
-                currentY = margin;
-              }
-            }
-          } else {
-            // Draw text placeholder if no thumb
-            doc.fontSize(8).font('Helvetica').text(`[No Thumb] ${media.original_filename}`, currentX, currentY + (thumbHeight/2), { width: thumbWidth, align: 'center' });
-            currentX += thumbWidth + spacing;
-            if (currentX + thumbWidth > doc.page.width - margin) {
-              currentX = startX;
-              currentY += thumbHeight + 30 + spacing;
-              if (currentY + thumbHeight > doc.page.height - margin) {
-                doc.addPage();
-                currentY = margin;
-              }
-            }
-          }
-        } catch (err) {
-          console.error('Error fetching thumbnail for PDF:', err);
-          // Fallback
-          doc.fontSize(8).font('Helvetica').text(`[Error] ${media.original_filename}`, currentX, currentY + (thumbHeight/2), { width: thumbWidth, align: 'center' });
-          currentX += thumbWidth + spacing;
-        }
-      }
-    }
-
-    // Log export
+    // Log export request
     await fastify.db.query(
       `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address)
-       VALUES ($1, 'DOWNLOAD', 'activity_export_pdf', $2, $3)`,
+       VALUES ($1, 'EXPORT', 'activity_export_pdf', $2, $3)`,
       [user.id, id, request.ip]
     );
 
-    doc.end();
-    return reply;
+    return reply.status(202).send({ message: 'Proses ekspor PDF dimulai', job_id: jobId });
+  });
+
+  // ─── GET /api/export/jobs/:id ──────
+  fastify.get('/jobs/:id', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    const { id } = request.params;
+    const user = request.currentUser!;
+
+    const { rows: jobs } = await fastify.db.query(
+      `SELECT id, status, file_name, error_message, created_at, completed_at
+       FROM export_jobs
+       WHERE id = $1 AND user_id = $2`,
+      [id, user.id]
+    );
+
+    if (jobs.length === 0) {
+      return reply.status(404).send({ error: 'Job tidak ditemukan' });
+    }
+
+    return reply.send(jobs[0]);
+  });
+
+  // ─── GET /api/export/download/:id ──────
+  fastify.get('/download/:id', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    const { id } = request.params;
+    const user = request.currentUser!;
+
+    const { rows: jobs } = await fastify.db.query(
+      `SELECT status, storage_key, file_name, entity_type, entity_id
+       FROM export_jobs
+       WHERE id = $1 AND user_id = $2`,
+      [id, user.id]
+    );
+
+    if (jobs.length === 0) {
+      return reply.status(404).send({ error: 'Job tidak ditemukan' });
+    }
+
+    const job = jobs[0];
+
+    if (job.status !== 'COMPLETED' || !job.storage_key) {
+      return reply.status(400).send({ error: 'File export belum siap atau gagal diproses' });
+    }
+
+    try {
+      const stream = await fastify.minio.getObject(fastify.minioBuckets.exports, job.storage_key);
+      
+      const contentType = job.storage_key.endsWith('.pdf') ? 'application/pdf' : 'application/zip';
+      reply.header('Content-Type', contentType);
+      reply.header('Content-Disposition', `attachment; filename="${job.file_name}"`);
+      
+      // Log export download
+      await fastify.db.query(
+        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, ip_address)
+         VALUES ($1, 'DOWNLOAD', $2, $3, $4)`,
+        [user.id, job.entity_type, job.entity_id, request.ip]
+      );
+
+      return reply.send(stream);
+    } catch (err: any) {
+      fastify.log.error(err, `Gagal mendownload export file: ${job.storage_key}`);
+      return reply.status(500).send({ error: 'Gagal mengambil file export' });
+    }
   });
 
   // ─── GET /api/export/audit/pdf ─────────────

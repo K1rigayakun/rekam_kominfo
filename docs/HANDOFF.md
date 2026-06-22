@@ -71,11 +71,17 @@ For local LAN replacement server:
 
 For real server:
 
-1. Follow `../Plan Awal/implementasi_realserver.md`.
+1. Follow `../sampah/Plan Awal/implementasi_realserver.md`.
 2. Use Ubuntu Server 22.04 LTS.
 3. Run app through PM2 behind Nginx.
 4. Keep PostgreSQL, Redis, and MinIO bound to localhost/private network.
 5. Enable SSL, UFW, fail2ban, backup, monitoring, and log rotation.
+
+For desktop app:
+
+1. App uses Tauri, React, and `tus-js-client`.
+2. `npm run tauri build` to compile the Windows executable.
+3. Includes SQLite queue, parallel chunks uploading, MB/s speed monitor, and batch activity creation.
 
 Minimum production baseline:
 
@@ -96,7 +102,6 @@ Minimum production baseline:
 
 ## Known Gaps To Continue
 
-- Desktop app/Tauri camera offload is not implemented in this repo yet. Implement the class diagram in `docs/ARCHITECTURE.md` with Tauri, SQLite queue, robocopy on Windows, SHA-256 verification, and tus resumable upload.
 - Media processing queue must be tested with real large videos before production.
 - Public quality selector depends on processed quality variants being reliably generated.
 - OpenAPI is manual and should be auto-generated before production.

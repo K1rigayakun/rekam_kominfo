@@ -10,22 +10,41 @@ import path from 'path';
 import os from 'os';
 import { randomUUID } from 'crypto';
 
-const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+function requireEnv(name: string) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Environment variable ${name} wajib diisi`);
+  }
+  return value;
+}
+
+const redis = new Redis(requireEnv('REDIS_URL'));
 
 const db = new Client({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: requireEnv('DATABASE_URL'),
 });
 
 const minio = new Minio.Client({
   endPoint: process.env.MINIO_ENDPOINT || 'localhost',
   port: Number(process.env.MINIO_PORT) || 9000,
   useSSL: process.env.MINIO_USE_SSL === 'true',
-  accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-  secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
+  accessKey: requireEnv('MINIO_ACCESS_KEY'),
+  secretKey: requireEnv('MINIO_SECRET_KEY'),
 });
 
 const RAW_BUCKET = process.env.MINIO_BUCKET_RAW || 'rekam-raw';
 const PROCESSED_BUCKET = process.env.MINIO_BUCKET_PROCESSED || 'rekam-processed';
+const IMAGE_PREVIEW_QUALITY = Number(process.env.IMAGE_PREVIEW_QUALITY || 90);
+const IMAGE_THUMBNAIL_QUALITY = Number(process.env.IMAGE_THUMBNAIL_QUALITY || 75);
+const VIDEO_CRF = process.env.VIDEO_CRF || '23';
+const VIDEO_PRESET = process.env.VIDEO_PRESET || 'fast';
+
+if (process.env.FFMPEG_PATH) {
+  ffmpeg.setFfmpegPath(process.env.FFMPEG_PATH);
+}
+if (process.env.FFPROBE_PATH) {
+  ffmpeg.setFfprobePath(process.env.FFPROBE_PATH);
+}
 
 async function processImage(mediaId: string, storageKeyRaw: string, activityId: string, sectionId: string) {
   const tmpRawPath = path.join(os.tmpdir(), `raw_${mediaId}`);
@@ -44,7 +63,7 @@ async function processImage(mediaId: string, storageKeyRaw: string, activityId: 
 
   await sharp(tmpRawPath)
     .resize(1920, 1080, { fit: 'inside', withoutEnlargement: true })
-    .webp({ quality: 80 })
+    .webp({ quality: IMAGE_PREVIEW_QUALITY })
     .toFile(tmpProcessedPath);
 
   // Buat thumbnail - WEBP 400x400
@@ -53,7 +72,7 @@ async function processImage(mediaId: string, storageKeyRaw: string, activityId: 
 
   await sharp(tmpRawPath)
     .resize(400, 400, { fit: 'cover' })
-    .webp({ quality: 60 })
+    .webp({ quality: IMAGE_THUMBNAIL_QUALITY })
     .toFile(tmpThumbPath);
 
   // Upload processed
@@ -91,10 +110,12 @@ const transcodeVideo = (inputPath: string, outputPath: string, resolution: strin
       .outputOptions([
         `-vf scale=-2:${resolution}`,
         '-c:v libx264',
-        '-preset fast',
-        '-crf 28',
+        `-preset ${VIDEO_PRESET}`,
+        `-crf ${VIDEO_CRF}`,
         '-c:a aac',
-        '-b:a 128k'
+        '-b:a 160k',
+        '-movflags +faststart',
+        '-pix_fmt yuv420p'
       ])
       .on('end', () => resolve())
       .on('error', (err) => reject(err))
@@ -117,56 +138,80 @@ async function processVideo(mediaId: string, storageKeyRaw: string, activityId: 
   const qualityVariants: Record<string, string> = {};
 
   return new Promise<void>((resolve, reject) => {
-    ffmpeg(tmpRawPath)
-      .on('end', async () => {
-        try {
-          // Convert thumb.jpg to thumb.webp using sharp
-          await sharp(tmpThumbPath)
-            .resize(400, 400, { fit: 'cover' })
-            .webp({ quality: 60 })
-            .toFile(finalThumbPath);
+    // 1. Get metadata first
+    ffmpeg.ffprobe(tmpRawPath, async (err, metadata) => {
+      let sourceWidth: number | null = null;
+      let sourceHeight: number | null = null;
+      let duration: number | null = null;
 
-          // Upload thumbnail
-          await minio.fPutObject(PROCESSED_BUCKET, finalThumbKey, finalThumbPath, {
-            'Content-Type': 'image/webp',
-          });
+      if (!err && metadata) {
+        const stream = metadata.streams.find((s) => s.codec_type === 'video');
+        if (stream) {
+          sourceWidth = stream.width || null;
+          sourceHeight = stream.height || null;
+        }
+        duration = metadata.format.duration || null;
+      }
 
-          // Transcoding to multiple resolutions
-          const resolutions = [
-            { label: '360p', height: '360' },
-            { label: '480p', height: '480' },
-            { label: '720p', height: '720' },
-            { label: '1080p', height: '1080' }
-          ];
+      // Filter resolutions to prevent upscaling
+      const allResolutions = [
+        { label: '360p', height: 360 },
+        { label: '480p', height: 480 },
+        { label: '720p', height: 720 },
+        { label: '1080p', height: 1080 }
+      ];
 
-          for (const res of resolutions) {
-            const outPath = path.join(os.tmpdir(), `${mediaId}_${res.label}.mp4`);
-            const outKey = `${activityId}/${sectionId}/${uuid}_${res.label}.mp4`;
-            console.log(`[Worker] Transcoding video ${mediaId} to ${res.label}...`);
-            await transcodeVideo(tmpRawPath, outPath, res.height);
-            await minio.fPutObject(PROCESSED_BUCKET, outKey, outPath, { 'Content-Type': 'video/mp4' });
-            qualityVariants[res.label] = outKey;
-            
-            // Set 720p or 360p as default processed key
-            if (res.label === '720p' || (res.label === '360p' && !defaultProcessedKey)) {
-                defaultProcessedKey = outKey;
+      const resolutions = allResolutions.filter(res => {
+        // If we can't determine source height, we allow up to 720p as fallback
+        if (!sourceHeight) return res.height <= 720; 
+        
+        // Allow if target height is less than or slightly larger (to account for odd resolutions like 718p)
+        return res.height <= sourceHeight + 10;
+      });
+
+      // If source is very small, ensure at least one resolution (e.g. 360p) is generated
+      if (resolutions.length === 0) {
+        resolutions.push(allResolutions[0]);
+      }
+
+      // 2. Extract thumbnail
+      ffmpeg(tmpRawPath)
+        .screenshots({
+          count: 1,
+          folder: os.tmpdir(),
+          filename: `thumb_${mediaId}.jpg`,
+          size: '400x400',
+          timemarks: ['10%']
+        })
+        .on('end', async () => {
+          try {
+            // Convert thumb.jpg to thumb.webp using sharp
+            if (fs.existsSync(tmpThumbPath)) {
+              await sharp(tmpThumbPath)
+                .resize(400, 400, { fit: 'cover' })
+                .webp({ quality: IMAGE_THUMBNAIL_QUALITY })
+                .toFile(finalThumbPath);
+
+              // Upload thumbnail
+              await minio.fPutObject(PROCESSED_BUCKET, finalThumbKey, finalThumbPath, {
+                'Content-Type': 'image/webp',
+              });
             }
-            fs.unlinkSync(outPath);
-          }
 
-          // Get metadata
-          ffmpeg.ffprobe(tmpRawPath, async (err, metadata) => {
-            let width = null;
-            let height = null;
-            let duration = null;
-
-            if (!err && metadata) {
-              const stream = metadata.streams.find((s) => s.codec_type === 'video');
-              if (stream) {
-                width = stream.width || null;
-                height = stream.height || null;
-              }
-              duration = metadata.format.duration || null;
+            // 3. Transcoding to multiple resolutions
+            for (const res of resolutions) {
+              const outPath = path.join(os.tmpdir(), `${mediaId}_${res.label}.mp4`);
+              const outKey = `${activityId}/${sectionId}/${uuid}_${res.label}.mp4`;
+              console.log(`[Worker] Transcoding video ${mediaId} to ${res.label}... (Source height: ${sourceHeight})`);
+              
+              await transcodeVideo(tmpRawPath, outPath, res.height.toString());
+              await minio.fPutObject(PROCESSED_BUCKET, outKey, outPath, { 'Content-Type': 'video/mp4' });
+              qualityVariants[res.label] = outKey;
+              
+              // Set the highest available as default processed key
+              defaultProcessedKey = outKey;
+              
+              fs.unlinkSync(outPath);
             }
 
             // Update DB
@@ -181,28 +226,31 @@ async function processVideo(mediaId: string, storageKeyRaw: string, activityId: 
                    duration_seconds = $6,
                    updated_at = NOW()
                WHERE id = $7`,
-              [defaultProcessedKey, finalThumbKey, JSON.stringify(qualityVariants), width, height, duration, mediaId]
+              [
+                defaultProcessedKey, 
+                fs.existsSync(finalThumbPath) ? finalThumbKey : null, 
+                JSON.stringify(qualityVariants), 
+                sourceWidth, 
+                sourceHeight, 
+                duration, 
+                mediaId
+              ]
             );
 
             // Cleanup
-            fs.unlinkSync(tmpRawPath);
-            fs.unlinkSync(tmpThumbPath);
-            fs.unlinkSync(finalThumbPath);
+            if (fs.existsSync(tmpRawPath)) fs.unlinkSync(tmpRawPath);
+            if (fs.existsSync(tmpThumbPath)) fs.unlinkSync(tmpThumbPath);
+            if (fs.existsSync(finalThumbPath)) fs.unlinkSync(finalThumbPath);
+
             resolve();
-          });
-        } catch (error) {
-          reject(error);
-        }
-      })
-      .on('error', (err) => {
-        reject(err);
-      })
-      .screenshots({
-        timestamps: ['00:00:01'],
-        filename: path.basename(tmpThumbPath),
-        folder: path.dirname(tmpThumbPath),
-        size: '1280x720',
-      });
+          } catch (err) {
+            reject(err);
+          }
+        })
+        .on('error', (err) => {
+          reject(err);
+        });
+    });
   });
 }
 
@@ -227,7 +275,7 @@ const worker = new Worker(
   },
   { 
     connection: redis as any,
-    concurrency: 2
+    concurrency: Number(process.env.MEDIA_PROCESSING_CONCURRENCY || 2)
   }
 );
 

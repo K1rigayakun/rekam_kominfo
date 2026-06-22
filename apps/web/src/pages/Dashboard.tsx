@@ -112,6 +112,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchActivities();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, search, dateFrom, dateTo, filterDay, filterMonth, filterYear, filterTeamId, filterDistrictId, showArchived]);
 
   useEffect(() => {

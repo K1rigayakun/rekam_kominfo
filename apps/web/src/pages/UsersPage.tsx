@@ -37,7 +37,7 @@ export default function UsersPage() {
       setLoading(true);
       const res = await api.get("/api/users");
       setUsers(res.data.data || []);
-    } catch (err) {
+    } catch {
       setError("Gagal memuat pengguna");
     } finally {
       setLoading(false);
@@ -328,7 +328,6 @@ export default function UsersPage() {
                   }
                   className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500/20 outline-none bg-white"
                 >
-                  {/* VIEWER removed */}
                   <option value="EDITOR">EDITOR</option>
                   <option value="SUPER_ADMIN">SUPER_ADMIN</option>
                 </select>

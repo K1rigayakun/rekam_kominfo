@@ -36,7 +36,7 @@ export default function AuditPage() {
       const res = await api.get(`/api/audit?${params.toString()}`);
       setLogs(res.data.data);
       setTotalPages(res.data.pagination.total_pages);
-    } catch (err) {
+    } catch {
       setError("Gagal memuat log aktivitas");
     } finally {
       setLoading(false);
@@ -56,6 +56,7 @@ export default function AuditPage() {
 
   useEffect(() => {
     fetchLogs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, actionFilter]);
 
   const actions = [
