@@ -138,8 +138,11 @@ sudo systemctl reload nginx
 Agar aplikasi yang ada di jaringan offline kantor bisa diakses siapa saja lewat domain:
 1. Login ke [Cloudflare Zero Trust](https://one.dash.cloudflare.com/).
 2. Buat Tunnel baru (Networks > Tunnels).
-3. Install konektor di server Ubuntu Anda.
-4. Hubungkan rute `rekam.namakantor.go.id` dan `media.rekam.namakantor.go.id` ke `http://localhost:80`.
+3. **Install Konektor (Cloudflared) di Server Anda**: 
+   - *Penjelasan Lengkap*: Saat membuat Tunnel di *dashboard*, Cloudflare akan memberikan baris perintah khusus (seperti `cloudflared service install eyJ...`). 
+   - Cukup *copy-paste* perintah tersebut ke terminal server Ubuntu Anda.
+   - **Keamanan Ekstra**: Dengan sistem *Tunnel* ini, Anda **tidak perlu membuka *port* jaringan apapun (seperti Port 80 / 443) di router firewall kantor Anda**. Konektor ini akan bertindak sebagai agen kurir dari *dalam* server yang aman, secara proaktif mengetuk pintu Cloudflare untuk menjemput trafik pengunjung. Server akan kebal dari *DDoS* dan serangan pemindaian pelabuhan (*Port Scanning*).
+4. Hubungkan rute `rekam.namakantor.go.id` dan `media.rekam.namakantor.go.id` ke `http://localhost:80` dari *dashboard* Cloudflare.
 
 ---
 
