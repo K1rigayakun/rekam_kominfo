@@ -2,152 +2,134 @@
 
 REKAM adalah platform tingkat *Enterprise* untuk manajemen dokumentasi kegiatan Kominfo. Platform ini mencakup pengelolaan upload media, pengelompokan acara per kecamatan, lampiran, QR sharing selektif, audit log, export, dan halaman publik.
 
-Dokumen ini merupakan panduan lengkap yang mencakup **Deployment (Infrastruktur)**, **Pengembangan (Development)**, dan **Maintenance**.
+Dokumen ini merupakan panduan lengkap yang diurutkan mulai dari persiapan **Development (Lokal)**, **Struktur Arsitektur**, **Deployment Server Production**, hingga **Maintenance**.
 
 ---
 
-# 🏢 BAGIAN 1: ENTERPRISE DEPLOYMENT & HANDOVER
-**Ditujukan Untuk**: Tim DevOps, System Administrator, IT Infrastructure  
+# 🚀 1. PENDAHULUAN & TECH STACK
 
-## 1.1 Pendahuluan & Topologi Jaringan
-Aplikasi dibangun menggunakan arsitektur *Monorepo* yang memisahkan beban kerja antara Backend API, Front-End Internal (Admin), dan Front-End Eksternal (Instansi Luar). 
+- **Web Admin (Internal)**: React 19, Vite 8, TypeScript, Tailwind CSS 4, Motion, Zustand.
+- **Web Media (Eksternal)**: React 19, Vite 8, TypeScript, Tailwind CSS 4.
+- **Backend API**: Node.js 20+, Fastify 5, TypeScript 5, BullMQ (Queue).
+- **Infrastruktur Data**: PostgreSQL 15, Redis 7, MinIO (Object Storage S3-compatible).
+- **Proses Media**: tus server (Upload chunking raksasa), FFmpeg (Pemrosesan Video).
 
-Untuk memastikan aplikasi ini **TIDAK MENGHAMBAT JARINGAN LOKAL** perusahaan meskipun diserang trafik tinggi, kami telah menyiapkan arsitektur *Offloading*:
-1. **Cloudflare Tunnel (Wajib digunakan)**: Menjadikan server offline menjadi online tanpa harus membuka port di Router/Firewall kantor. Cloudflare akan bertindak sebagai *Global CDN* sehingga file statis web (HTML, CSS, JS) akan di-cache di server Cloudflare luar negeri/lokal, bukan membebani bandwidth kantor Anda.
-2. **Nginx Reverse Proxy dengan Rate Limiting**: Memblokir serangan bot (DDoS) secara langsung dari server.
-3. **Chunked Upload (Tus Protocol)**: Upload file bergiga-giga tidak akan membuat server nge-hang karena file dikirim dalam potongan kecil (chunk).
+---
 
-## 1.2 Standar Instalasi (All-in-One Automation)
-Kami menyarankan penggunaan **Docker** untuk instalasi *Database, Redis, dan MinIO* agar environment bersih dan tidak merusak server host.
+# 💻 2. PENGEMBANGAN LOKAL (QUICK START)
+**Ditujukan Untuk**: Software Engineer / Developer (Mencoba di Laptop/PC Pribadi)
 
-### 🧰 A. Setup Infrastruktur Data (1 Menit)
-Jalankan file `docker-compose.yml` yang sudah kami sediakan di root folder. File ini otomatis menginstal PostgreSQL 15, Redis 7 (Max 1GB RAM), dan MinIO beserta 4 bucket otomatis.
+Pastikan Anda telah menginstal **Node.js 20/22 LTS**, **npm 10+**, **Docker Desktop**, dan **FFmpeg** (masuk ke dalam system PATH).
+
+### Langkah 1: Clone & Install
+```bash
+git clone https://github.com/K1rigayakun/rekam_kominfo.git rekam
+cd rekam
+npm run install:all
+```
+
+### Langkah 2: Setup Environment Variables
+Salin file template environment ke nama aslinya (kemudian buka dan ganti yang perlu diubah, misalnya password):
+```bash
+cp .env.example .env
+cp apps/backend/.env.example apps/backend/.env
+cp apps/web/.env.example apps/web/.env
+cp apps/media-web/.env.example apps/media-web/.env
+```
+
+### Langkah 3: Menjalankan Database & Infrastruktur (Via Docker)
+```bash
+# Menyalakan PostgreSQL, Redis, dan MinIO di belakang layar
+npm run dev:infra
+```
+
+### Langkah 4: Migrasi Database & Data Awal (Seeding)
+```bash
+npm run db:migrate
+npm run db:seed
+npm run db:check
+```
+
+### Langkah 5: Menjalankan Aplikasi (Mode Development)
+```bash
+# Menjalankan Backend API dan Frontend secara bersamaan
+npm run dev
+```
+Aplikasi bisa langsung dibuka di browser melalui link yang muncul di terminal (biasanya `http://localhost:5173` untuk web admin).
+
+---
+
+# 📂 3. STRUKTUR APLIKASI
+```text
+rekam/
+  apps/
+    backend/      Fastify API, migrations, seed, queue workers
+    web/          React/Vite frontend (Admin Kominfo)
+    media-web/    React/Vite frontend (Instansi Media Luar)
+  docs/           Dokumentasi mendalam, OpenAPI, Maintenance Guide
+  scripts/        Local developer scripts
+  docker-compose.yml
+```
+
+> [!NOTE]
+> Untuk panduan *Maintenance Kode*, *Troubleshooting Error*, dan bagaimana Pemrosesan Video serta Arsitektur Backend bekerja, silakan buka file **`docs/MAINTENANCE_GUIDE.md`**.
+
+---
+
+# 🏢 4. DEPLOYMENT SERVER (ENTERPRISE HANDOVER)
+**Ditujukan Untuk**: Tim DevOps, System Administrator, IT Infrastructure (Setup ke Server Asli)
+
+### A. Persiapan Infrastruktur Data (Production)
+Jalankan file `docker-compose.yml` di server asli. File ini otomatis membatasi penggunaan RAM (Redis Max 1GB) dan menyiapkan MinIO (4 Bucket).
 ```bash
 cd /opt/rekam
 docker-compose up -d
 ```
 
-### 🧰 B. Setup Aplikasi Node.js (Aplikasi REKAM)
-Salin konfigurasi production ke masing-masing environment:
+### B. Konfigurasi Environment Production
+Salin file konfigurasi `.env.production` (yang sudah ada di repo) menjadi `.env` asli:
 ```bash
 cp apps/backend/.env.production apps/backend/.env
 cp apps/web/.env.production apps/web/.env
 cp apps/media-web/.env.production apps/media-web/.env
 ```
-Gunakan *script* otomatis yang telah disediakan untuk *build* dan *run*:
+*(Wajib buka `apps/backend/.env` dan ubah JWT Secret serta password database sebelum go-live!)*
+
+### C. Build & Run (Node.js & PM2)
+Gunakan script robot otomatis yang sudah kami siapkan:
 ```bash
 chmod +x deploy-helper.sh
 ./deploy-helper.sh
 ```
-*Script ini akan mem-build semua frontend, backend, menjalankan migrasi database, dan menyalakan aplikasi 24/7 menggunakan PM2 Process Manager.*
+Script di atas akan mem-build semua frontend, menjalankan migrasi database production, dan menyalakan PM2 Process Manager 24/7.
 
-## 1.3 Pengaturan Jaringan & Nginx (Kritikal)
-File `rekam_nginx.conf` telah dibuat dengan standar *Enterprise* dan telah mempertimbangkan **Network Performance**. Anda wajib menyalin file tersebut ke Nginx:
+### D. Pengaturan Jaringan, Keamanan, & Nginx
+Sistem kami telah disiapkan dengan fitur *Rate Limiting* (Anti Spam) dan *Chunked Upload* (Upload file besar tanpa *hang*). Salin konfigurasi profesional kami ke Nginx server Anda:
 ```bash
 sudo cp rekam_nginx.conf /etc/nginx/sites-available/rekam
 sudo ln -s /etc/nginx/sites-available/rekam /etc/nginx/sites-enabled/
 sudo systemctl reload nginx
 ```
 
-## 1.4 Akses Server via Internet (Tanpa Buka Port)
+### E. Expose ke Internet Tanpa Buka Port Router (Opsi Paling Aman)
+Agar aplikasi yang ada di jaringan offline kantor bisa diakses siapa saja lewat domain:
 1. Login ke [Cloudflare Zero Trust](https://one.dash.cloudflare.com/).
-2. Pilih **Networks > Tunnels** -> Create a Tunnel.
-3. Install konektor di server Ubuntu Anda sesuai perintah yang muncul.
-4. Pada tab **Public Hostname**, tambahkan rute:
-   - `rekam.namakantor.go.id` -> arahkan ke `http://localhost:80`
-   - `media.rekam.namakantor.go.id` -> arahkan ke `http://localhost:80`
-5. Website sudah online dengan HTTPS, dilindungi WAF (Web Application Firewall) Cloudflare, dan menggunakan bandwidth Cloudflare untuk caching UI.
-
-## 1.5 Credentials & Environment Production
-Semua kata sandi, token JWT, dan konfigurasi API berada di:
-- `apps/backend/.env.production`
-- `apps/web/.env.production`
-- `apps/media-web/.env.production`
-
-> [!WARNING]
-> Ganti `JWT_ACCESS_SECRET` serta `GANTI_PASSWORD` pada string Database dan MinIO untuk mencegah kebocoran data sebelum rilis ke publik.
+2. Buat Tunnel baru (Networks > Tunnels).
+3. Install konektor di server Ubuntu Anda.
+4. Hubungkan rute `rekam.namakantor.go.id` dan `media.rekam.namakantor.go.id` ke `http://localhost:80`.
 
 ---
 
-# 🛠️ BAGIAN 2: PENGEMBANGAN (DEVELOPMENT GUIDE)
-**Ditujukan Untuk**: Software Engineer / Developer  
+# 🔧 5. TROUBLESHOOTING UMUM (FAQ)
 
-## 2.1 Tech Stack
-- **Web (Frontend)**: React 19, Vite 8, TypeScript, Tailwind CSS 4, Motion, Zustand, Axios, TipTap.
-- **Backend**: Node.js 20+, Fastify 5, TypeScript 5, PostgreSQL 15, Redis 7, MinIO, BullMQ, tus server, FFmpeg.
-
-## 2.2 Quick Start Local
-Pastikan Anda memiliki Node.js 20/22 LTS, npm 10+, Docker Desktop, dan FFmpeg.
-
-```bash
-# Clone & Install
-git clone <REPO_URL> rekam
-cd rekam
-npm run install:all
-
-# Siapkan environment variables (isi CHANGE_ME)
-cp .env.example .env
-cp apps/backend/.env.example apps/backend/.env
-cp apps/web/.env.example apps/web/.env
-
-# Jalankan infrastruktur lokal (Database, Redis, Minio)
-npm run dev:infra
-
-# Jalankan Migrasi dan Seed
-npm run db:migrate
-npm run db:seed
-npm run db:check
-
-# Jalankan server Frontend & Backend mode Development
-npm run dev
-```
-
-## 2.3 Folder Structure
-```text
-rekam/
-  apps/
-    backend/      Fastify API, migrations, seed, queue workers
-    web/          React/Vite frontend (Admin)
-    media-web/    React/Vite frontend (Instansi Media Luar)
-  docs/           Arsitektur, OpenAPI, Handoff
-  scripts/        Local developer scripts
-  docker-compose.yml
-```
-
----
-
-# 🔧 BAGIAN 3: MAINTENANCE & TROUBLESHOOTING
-**Ditujukan Untuk**: Tim Developer & IT Support  
-
-## 3.1 Troubleshooting Umum
-
-- **QR Code mengarah ke IP Localhost**:
-  Pastikan Anda mengakses web menggunakan IP Address server atau Domain, bukan `localhost`. Jika terpaksa, pastikan `PUBLIC_BASE_URL` di `apps/backend/.env` sudah diisi dengan domain yang benar. Sistem QR sudah dibuat sangat dinamis membaca request host.
+- **QR Code Mengarah ke Localhost?**
+  Akses aplikasi via IP server atau domain, bukan `localhost`. QR Code dibuat dinamis mengikuti URL yang dibuka oleh pengguna. Untuk mengunci domain publik permanen, isi variabel `PUBLIC_BASE_URL` di `apps/backend/.env`.
   
-- **Video Lama Diproses / Macet**:
-  Pastikan `ffmpeg` sudah terinstal di server (`ffmpeg -version`). Cek log pemrosesan dengan perintah `pm2 logs rekam-api`.
-
-- **Gagal Upload File Besar**:
-  Nginx secara default membatasi ukuran file. Blok Nginx `rekam_nginx.conf` harus memiliki `client_max_body_size 0;` (unlimited) karena aplikasi ini menggunakan protokol *tus* (chunked upload).
-
-## 3.2 Mengubah Skema Database
-Jika Anda melakukan perubahan pada entitas atau relasi database, Anda harus membuat migrasi baru:
-```bash
-cd apps/backend
-npm run db:migrate
-npm run db:check
-```
-
-## 3.3 Git Handoff (Menyimpan Pekerjaan)
-Project ini harus dipush ke GitHub/GitLab:
-```bash
-git init
-git add .
-git commit -m "handoff: prepare REKAM enterprise architecture"
-git remote add origin <REPO_URL>
-git push -u origin main
-```
-Pastikan `node_modules`, `.env` lokal, dan file sampah tidak masuk ke commit.
+- **Video Terus-Terusan Status "Processing"?**
+  Pastikan `ffmpeg` terinstal di sistem Ubuntu/Windows server (`ffmpeg -version`). Cek masalahnya lewat perintah `pm2 logs rekam-api`.
+  
+- **Upload File Besar Gagal (HTTP 413)?**
+  Nginx secara default membatasi ukuran. Pastikan block `server {}` Nginx Anda memiliki perintah `client_max_body_size 0;` (unlimited) sesuai dengan file `rekam_nginx.conf` yang kami berikan.
 
 ---
 **Hak Cipta © Tim REKAM Kominfo.**
