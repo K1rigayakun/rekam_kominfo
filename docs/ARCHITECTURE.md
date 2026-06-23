@@ -7,7 +7,9 @@ flowchart LR
   Operator[Operator / Editor] --> Web[React Web App]
   Admin[Super Admin] --> Web
   Public[QR Public Viewer] --> Web
-  Web --> API[Fastify API]
+  Media[Media / Wartawan] --> MediaWeb[Media Portal Web]
+  MediaWeb --> API[Fastify API]
+  Web --> API
   API --> PG[(PostgreSQL)]
   API --> Redis[(Redis)]
   API --> MinIO[(MinIO Private Buckets)]
@@ -38,6 +40,9 @@ erDiagram
   SHARING_SNAPSHOTS ||--o{ QR_SCAN_LOGS : tracks
   ACTIVITIES ||--o{ ACTIVITY_VERSIONS : versions
   USERS ||--o{ AUDIT_LOGS : acts
+  MEDIA_AGENCIES ||--o{ USERS : has
+  MEDIA_AGENCIES ||--o{ NEWS_COVERAGES : publishes
+  USERS ||--o{ NEWS_COVERAGES : uploads
 
   DISTRICTS {
     uuid id PK
@@ -86,6 +91,21 @@ erDiagram
     uuid entity_id
     json details
   }
+  MEDIA_AGENCIES {
+    uuid id PK
+    string name
+    string website_url
+    string media_type
+  }
+  NEWS_COVERAGES {
+    uuid id PK
+    uuid media_agency_id FK
+    uuid uploaded_by FK
+    string title
+    string news_url
+    date publish_date
+    string file_url
+  }
 ```
 
 ## Auth Flow
@@ -115,12 +135,14 @@ sequenceDiagram
 flowchart TB
   subgraph Laptop["Local operator laptop / LAN host"]
     WebDev[Vite web 0.0.0.0:5173]
+    MediaDev[Media web 0.0.0.0:5174]
     ApiDev[Fastify API 0.0.0.0:3000]
     Docker[Docker Compose]
     Docker --> PG[(PostgreSQL :5432)]
     Docker --> Redis[(Redis :6379)]
     Docker --> MinIO[(MinIO :9000/:9001)]
     WebDev --> ApiDev
+    MediaDev --> ApiDev
     ApiDev --> PG
     ApiDev --> Redis
     ApiDev --> MinIO
