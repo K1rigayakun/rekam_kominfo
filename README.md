@@ -31,7 +31,6 @@ npm run install:all
 ### Langkah 2: Setup Environment Variables
 Salin file template environment ke nama aslinya (kemudian buka dan ganti yang perlu diubah, misalnya password):
 ```bash
-cp .env.example .env
 cp apps/backend/.env.example apps/backend/.env
 cp apps/web/.env.example apps/web/.env
 cp apps/media-web/.env.example apps/media-web/.env
