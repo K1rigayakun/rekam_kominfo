@@ -1,4 +1,9 @@
-import { pool } from '../config/database';
+import 'dotenv/config';
+import { Pool } from 'pg';
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
 import bcrypt from 'bcryptjs';
 
 async function initAdmin() {
