@@ -77,14 +77,25 @@ rekam/
 # 🏢 4. DEPLOYMENT SERVER (ENTERPRISE HANDOVER)
 **Ditujukan Untuk**: Tim DevOps, System Administrator, IT Infrastructure (Setup ke Server Asli)
 
-### A. Persiapan Infrastruktur Data (Production)
-Jalankan file `docker-compose.yml` di server asli. File ini otomatis membatasi penggunaan RAM (Redis Max 1GB) dan menyiapkan MinIO (4 Bucket).
+### A. Prasyarat OS Server (Yang Wajib Di-install Manual)
+Siapkan **VPS/VM kosong (disarankan Ubuntu 22.04 LTS)**. Tim IT hanya perlu meng-install *software* inti berikut secara manual di OS Server:
+1. **Docker & Docker Compose** (Mesin virtualisasi).
+2. **Node.js (v20/v22) & NPM** (Untuk menjalankan backend).
+3. **PM2** (`npm install -g pm2`) (Untuk menjaga backend tetap hidup 24/7).
+4. **Nginx** (Untuk *reverse proxy* dan web server).
+5. **FFmpeg** (`sudo apt install ffmpeg`) (Untuk memotong/kompresi video).
+
+> [!TIP]
+> **TIDAK PERLU install PostgreSQL, Redis, atau MinIO secara manual!** Ketiga aplikasi berat ini akan otomatis di-download, di-install, dan dijalankan di dalam *container* yang bersih dan terisolasi oleh Docker pada langkah B di bawah ini.
+
+### B. Persiapan Infrastruktur Data (via Docker)
+Jalankan file `docker-compose.yml` di server asli. File ini otomatis menyiapkan Database PostgreSQL, Redis (Dibatasi Max RAM 1GB), dan MinIO (Object Storage S3) berserta pembuatan 4 *Bucket* secara otomatis.
 ```bash
 cd /opt/rekam
 docker-compose up -d
 ```
 
-### B. Konfigurasi Environment Production
+### C. Konfigurasi Environment Production
 Salin file konfigurasi `.env.production` (yang sudah ada di repo) menjadi `.env` asli:
 ```bash
 cp apps/backend/.env.production apps/backend/.env
@@ -118,7 +129,7 @@ npx tsx src/scripts/init_admin.ts "PasswordSuperAman123!"
 ```
 Username otomatis adalah `admin`. Berikan akun ini ke pihak yang berwenang.
 
-### C. Build & Run (Node.js & PM2)
+### D. Build & Run (Node.js & PM2)
 Gunakan script robot otomatis yang sudah kami siapkan:
 ```bash
 chmod +x deploy-helper.sh
@@ -126,7 +137,7 @@ chmod +x deploy-helper.sh
 ```
 Script di atas akan mem-build semua frontend, menjalankan migrasi database production, dan menyalakan PM2 Process Manager 24/7.
 
-### D. Pengaturan Jaringan, Keamanan, & Nginx
+### E. Pengaturan Jaringan, Keamanan, & Nginx
 Sistem kami telah disiapkan dengan fitur *Rate Limiting* (Anti Spam) dan *Chunked Upload* (Upload file besar tanpa *hang*). Salin konfigurasi profesional kami ke Nginx server Anda:
 ```bash
 sudo cp rekam_nginx.conf /etc/nginx/sites-available/rekam
@@ -134,7 +145,7 @@ sudo ln -s /etc/nginx/sites-available/rekam /etc/nginx/sites-enabled/
 sudo systemctl reload nginx
 ```
 
-### E. Expose ke Internet Tanpa Buka Port Router (Opsi Paling Aman)
+### F. Expose ke Internet Tanpa Buka Port Router (Opsi Paling Aman)
 Agar aplikasi yang ada di jaringan offline kantor bisa diakses siapa saja lewat domain:
 1. Login ke [Cloudflare Zero Trust](https://one.dash.cloudflare.com/).
 2. Buat Tunnel baru (Networks > Tunnels).
