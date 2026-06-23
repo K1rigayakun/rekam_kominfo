@@ -3,11 +3,12 @@ import { persist } from 'zustand/middleware';
 
 interface User {
   id: string;
-  email: string;
+  username: string;
   full_name: string;
   role: string;
   district_id?: string | null;
   district_name?: string | null;
+  media_agency_id?: string | null;
   is_active?: boolean;
   last_login_at?: string;
   last_upload_at?: string;

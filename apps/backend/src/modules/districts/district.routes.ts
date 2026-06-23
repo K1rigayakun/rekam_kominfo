@@ -34,7 +34,7 @@ export async function districtRoutes(fastify: FastifyInstance) {
 
     // Ambil user di kecamatan ini
     const { rows: users } = await fastify.db.query(
-      `SELECT id, email, full_name, role, is_active, last_login_at
+      `SELECT id, username, full_name, role, is_active, last_login_at
        FROM users 
        WHERE district_id = $1 ORDER BY full_name`,
       [id]

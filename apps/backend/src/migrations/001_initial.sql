@@ -39,7 +39,7 @@ CREATE TABLE teams (
 -- ─── 3. USERS ────────────────────────────────
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  email VARCHAR(255) NOT NULL UNIQUE,
+  username VARCHAR(255) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
   full_name VARCHAR(255) NOT NULL,
   role user_role NOT NULL DEFAULT 'VIEWER',
@@ -50,7 +50,7 @@ CREATE TABLE users (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_username ON users(username);
 CREATE INDEX idx_users_district_id ON users(district_id);
 
 -- ─── 4. TEAM_MEMBERS ─────────────────────────

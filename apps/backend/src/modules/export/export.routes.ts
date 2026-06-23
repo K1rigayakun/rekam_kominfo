@@ -212,7 +212,7 @@ export async function exportRoutes(fastify: FastifyInstance) {
     // Header
     doc.fontSize(20).text('Laporan Audit Log REKAM', { align: 'center' });
     doc.moveDown();
-    doc.fontSize(12).text(`Dicetak oleh: ${user.email}`, { align: 'center' });
+    doc.fontSize(12).text(`Dicetak oleh: ${user.username}`, { align: 'center' });
     doc.text(`Waktu: ${new Date().toLocaleString('id-ID')}`, { align: 'center' });
     doc.moveDown(2);
 
@@ -256,7 +256,7 @@ export async function exportRoutes(fastify: FastifyInstance) {
     }
 
     const { rows: logs } = await fastify.db.query(
-      `SELECT al.*, u.full_name as user_name, u.email as user_email
+      `SELECT al.*, u.full_name as user_name, u.username as user_username
        FROM audit_logs al
        LEFT JOIN users u ON u.id = al.user_id
        ORDER BY al.created_at DESC
@@ -267,20 +267,180 @@ export async function exportRoutes(fastify: FastifyInstance) {
     reply.header('Content-Disposition', 'attachment; filename="REKAM_Audit_Report.csv"');
 
     // Header CSV
-    let csv = 'Waktu,Pengguna,Email,Aksi,Entitas,ID Entitas,IP Address\n';
+    let csv = 'Waktu,Pengguna,Username,Aksi,Entitas,ID Entitas,IP Address\n';
 
     // Body CSV
     for (const log of logs) {
       const timeStr = new Date(log.created_at).toISOString();
       const userStr = log.user_name ? `"${log.user_name.replace(/"/g, '""')}"` : '"System"';
-      const emailStr = log.user_email ? `"${log.user_email}"` : '""';
+      const usernameStr = log.user_username ? `"${log.user_username}"` : '""';
       const actionStr = `"${log.action}"`;
       const entityStr = `"${log.entity_type || ''}"`;
       const entityIdStr = `"${log.entity_id || ''}"`;
       const ipStr = `"${log.ip_address || ''}"`;
 
-      csv += `${timeStr},${userStr},${emailStr},${actionStr},${entityStr},${entityIdStr},${ipStr}\n`;
+      csv += `${timeStr},${userStr},${usernameStr},${actionStr},${entityStr},${entityIdStr},${ipStr}\n`;
     }
+
+    return reply.send(csv);
+  });
+
+  // ─── GET /api/export/activities/csv ──────────
+  fastify.get('/activities/csv', async (request: FastifyRequest, reply: FastifyReply) => {
+    const user = request.currentUser!;
+    const { start_date, end_date } = request.query as any;
+
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'EDITOR') {
+      return reply.status(403).send({ error: 'Akses ditolak' });
+    }
+
+    let query = `
+      SELECT 
+        a.title,
+        t.name as team_name,
+        a.event_date,
+        a.location,
+        (
+          SELECT string_agg(tag_name, ', ')
+          FROM activity_tags
+          WHERE activity_id = a.id
+        ) as tags,
+        (
+          SELECT COUNT(id)
+          FROM media_files
+          WHERE activity_id = a.id
+        ) as internal_media_count
+      FROM activities a
+      LEFT JOIN teams t ON t.id = a.team_id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (start_date) {
+      query += ` AND a.event_date >= $${paramIndex++}`;
+      params.push(start_date);
+    }
+    if (end_date) {
+      query += ` AND a.event_date <= $${paramIndex++}`;
+      params.push(end_date);
+    }
+
+    query += ` ORDER BY a.event_date DESC NULLS LAST, a.created_at DESC`;
+
+    const { rows } = await fastify.db.query(query, params);
+
+    reply.header('Content-Type', 'text/csv');
+    reply.header('Content-Disposition', 'attachment; filename="Ringkasan_Acara_REKAM.csv"');
+
+    // Header CSV
+    let csv = 'Nama Acara,Tim Peliput,Tag,Tanggal,Lokasi,Jml File Internal\n';
+
+    // Helper escape CSV
+    const escapeCsv = (str: string | null | undefined | number) => {
+      if (str === null || str === undefined || str === '') return '-';
+      const strVal = String(str);
+      if (strVal.includes(',') || strVal.includes('"') || strVal.includes('\n')) {
+        return `"${strVal.replace(/"/g, '""')}"`;
+      }
+      return strVal;
+    };
+
+    // Body CSV
+    for (const row of rows) {
+      const dateStr = row.event_date ? new Date(row.event_date).toISOString().split('T')[0] : '-';
+      csv += `${escapeCsv(row.title)},${escapeCsv(row.team_name)},${escapeCsv(row.tags)},${escapeCsv(dateStr)},${escapeCsv(row.location)},${escapeCsv(row.internal_media_count)}\n`;
+    }
+
+    // Log audit
+    await fastify.db.query(
+      `INSERT INTO audit_logs (user_id, action, entity_type, ip_address)
+       VALUES ($1, 'EXPORT', 'activities_summary_csv', $2)`,
+      [user.id, request.ip]
+    );
+
+    return reply.send(csv);
+  });
+
+  // ─── GET /api/export/news-coverages/csv ──────
+  fastify.get('/news-coverages/csv', async (request: FastifyRequest, reply: FastifyReply) => {
+    const user = request.currentUser!;
+    const { start_date, end_date, media_agency_id } = request.query as any;
+
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'EDITOR' && user.role !== 'MEDIA') {
+      return reply.status(403).send({ error: 'Akses ditolak' });
+    }
+
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    let query = `
+      SELECT 
+        nc.title,
+        nc.news_url,
+        nc.publish_date,
+        ma.name as media_agency_name,
+        ma.website_url as media_website_url,
+        u.full_name as uploaded_by_name
+      FROM news_coverages nc
+      JOIN media_agencies ma ON ma.id = nc.media_agency_id
+      LEFT JOIN users u ON u.id = nc.uploaded_by
+      WHERE 1=1
+    `;
+
+    if (start_date) {
+      query += ` AND nc.publish_date >= $${paramIndex++}`;
+      params.push(start_date);
+    }
+    if (end_date) {
+      query += ` AND nc.publish_date <= $${paramIndex++}`;
+      params.push(end_date);
+    }
+    
+    // Filter Media
+    if (user.role === 'MEDIA') {
+      query += ` AND nc.media_agency_id = $${paramIndex++}`;
+      params.push(user.media_agency_id);
+    } else if (media_agency_id) {
+      query += ` AND nc.media_agency_id = $${paramIndex++}`;
+      params.push(media_agency_id);
+    }
+
+    query += ` ORDER BY nc.publish_date DESC NULLS LAST, nc.created_at DESC`;
+
+    const { rows } = await fastify.db.query(query, params);
+
+    reply.header('Content-Type', 'text/csv');
+    reply.header('Content-Disposition', `attachment; filename="news_coverages_${new Date().toISOString().split('T')[0]}.csv"`);
+
+    // Header CSV
+    let csv = 'Judul Berita,Tanggal Publish,Nama Media,Jumlah Lampiran\n';
+
+    // Helper escape CSV
+    const escapeCsv = (str: string | null | undefined | number) => {
+      if (str === null || str === undefined || str === '') return '-';
+      const strVal = String(str);
+      if (strVal.includes(',') || strVal.includes('"') || strVal.includes('\n')) {
+        return `"${strVal.replace(/"/g, '""')}"`;
+      }
+      return strVal;
+    };
+
+    // Body CSV
+    for (const row of rows) {
+      const dateStr = row.publish_date ? new Date(row.publish_date).toISOString().split('T')[0] : '-';
+      const agencyNameTitleCase = row.media_agency_name ? row.media_agency_name.replace(/\b\w/g, (l: string) => l.toUpperCase()) : "";
+      const mediaNameWithUrl = row.media_website_url ? row.media_website_url.replace(/^https?:\/\//, '') : agencyNameTitleCase;
+      const fileCount = Array.isArray(row.files) ? row.files.length : (row.files ? (typeof row.files === 'string' ? JSON.parse(row.files).length : 1) : 0);
+      csv += `${escapeCsv(row.title)},${escapeCsv(dateStr)},${escapeCsv(mediaNameWithUrl)},${fileCount}\n`;
+    }
+
+    // Log audit
+    await fastify.db.query(
+      `INSERT INTO audit_logs (user_id, action, entity_type, ip_address)
+       VALUES ($1, 'EXPORT', 'news_coverages_summary_csv', $2)`,
+      [user.id, request.ip]
+    );
 
     return reply.send(csv);
   });

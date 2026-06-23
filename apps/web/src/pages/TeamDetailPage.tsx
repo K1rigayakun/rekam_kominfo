@@ -159,9 +159,9 @@ export default function TeamDetailPage() {
                 team.members.map((m: any) => (
                   <div key={m.id} className="flex justify-between items-center p-3 border border-gray-100 rounded-xl bg-gray-50">
                     <div>
-                      <p className="text-sm font-bold text-gray-900">{m.full_name}</p>
-                      <p className="text-xs text-gray-500">{m.email}</p>
-                    </div>
+                        <p className="text-sm font-bold text-gray-900">{m.full_name}</p>
+                        <p className="text-xs text-gray-500">{m.username}</p>
+                      </div>
                     {isAdmin && (
                       <button
                         onClick={() => handleRemoveMember(m.id)}

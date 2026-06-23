@@ -1,164 +1,147 @@
-# REKAM
+# REKAM - Platform Manajemen Dokumentasi Kominfo
 
-REKAM adalah platform manajemen dokumentasi kegiatan Kominfo: upload media, pengelompokan acara per kecamatan, lampiran, QR sharing selektif, audit log, export, dan halaman publik.
+REKAM adalah platform tingkat *Enterprise* untuk manajemen dokumentasi kegiatan Kominfo. Platform ini mencakup pengelolaan upload media, pengelompokan acara per kecamatan, lampiran, QR sharing selektif, audit log, export, dan halaman publik.
 
-## Quick Start Local
+Dokumen ini merupakan panduan lengkap yang mencakup **Deployment (Infrastruktur)**, **Pengembangan (Development)**, dan **Maintenance**.
 
-Prerequisite:
+---
 
-- Node.js 20 LTS atau 22 LTS
-- npm 10+
-- Docker Desktop
-- FFmpeg tersedia di PATH jika fitur video processing dipakai
+# 🏢 BAGIAN 1: ENTERPRISE DEPLOYMENT & HANDOVER
+**Ditujukan Untuk**: Tim DevOps, System Administrator, IT Infrastructure  
 
-Setup dari clone baru:
+## 1.1 Pendahuluan & Topologi Jaringan
+Aplikasi dibangun menggunakan arsitektur *Monorepo* yang memisahkan beban kerja antara Backend API, Front-End Internal (Admin), dan Front-End Eksternal (Instansi Luar). 
 
-```powershell
+Untuk memastikan aplikasi ini **TIDAK MENGHAMBAT JARINGAN LOKAL** perusahaan meskipun diserang trafik tinggi, kami telah menyiapkan arsitektur *Offloading*:
+1. **Cloudflare Tunnel (Wajib digunakan)**: Menjadikan server offline menjadi online tanpa harus membuka port di Router/Firewall kantor. Cloudflare akan bertindak sebagai *Global CDN* sehingga file statis web (HTML, CSS, JS) akan di-cache di server Cloudflare luar negeri/lokal, bukan membebani bandwidth kantor Anda.
+2. **Nginx Reverse Proxy dengan Rate Limiting**: Memblokir serangan bot (DDoS) secara langsung dari server.
+3. **Chunked Upload (Tus Protocol)**: Upload file bergiga-giga tidak akan membuat server nge-hang karena file dikirim dalam potongan kecil (chunk).
+
+## 1.2 Standar Instalasi (All-in-One Automation)
+Kami menyarankan penggunaan **Docker** untuk instalasi *Database, Redis, dan MinIO* agar environment bersih dan tidak merusak server host.
+
+### 🧰 A. Setup Infrastruktur Data (1 Menit)
+Jalankan file `docker-compose.yml` yang sudah kami sediakan di root folder. File ini otomatis menginstal PostgreSQL 15, Redis 7 (Max 1GB RAM), dan MinIO beserta 4 bucket otomatis.
+```bash
+cd /opt/rekam
+docker-compose up -d
+```
+
+### 🧰 B. Setup Aplikasi Node.js (Aplikasi REKAM)
+Gunakan *script* otomatis yang telah disediakan:
+```bash
+chmod +x deploy-helper.sh
+./deploy-helper.sh
+```
+*Script ini akan mem-build semua frontend, backend, menjalankan migrasi database, dan menyalakan aplikasi 24/7 menggunakan PM2 Process Manager.*
+
+## 1.3 Pengaturan Jaringan & Nginx (Kritikal)
+File `rekam_nginx.conf` telah dibuat dengan standar *Enterprise* dan telah mempertimbangkan **Network Performance**. Anda wajib menyalin file tersebut ke Nginx:
+```bash
+sudo cp rekam_nginx.conf /etc/nginx/sites-available/rekam
+sudo ln -s /etc/nginx/sites-available/rekam /etc/nginx/sites-enabled/
+sudo systemctl reload nginx
+```
+
+## 1.4 Akses Server via Internet (Tanpa Buka Port)
+1. Login ke [Cloudflare Zero Trust](https://one.dash.cloudflare.com/).
+2. Pilih **Networks > Tunnels** -> Create a Tunnel.
+3. Install konektor di server Ubuntu Anda sesuai perintah yang muncul.
+4. Pada tab **Public Hostname**, tambahkan rute:
+   - `rekam.namakantor.go.id` -> arahkan ke `http://localhost:80`
+   - `media.rekam.namakantor.go.id` -> arahkan ke `http://localhost:80`
+5. Website sudah online dengan HTTPS, dilindungi WAF (Web Application Firewall) Cloudflare, dan menggunakan bandwidth Cloudflare untuk caching UI.
+
+## 1.5 Credentials & Environment Production
+Semua kata sandi, token JWT, dan konfigurasi API berada di:
+- `apps/backend/.env.production`
+- `apps/web/.env.production`
+- `apps/media-web/.env.production`
+
+> [!WARNING]
+> Ganti `JWT_ACCESS_SECRET` serta `GANTI_PASSWORD` pada string Database dan MinIO untuk mencegah kebocoran data sebelum rilis ke publik.
+
+---
+
+# 🛠️ BAGIAN 2: PENGEMBANGAN (DEVELOPMENT GUIDE)
+**Ditujukan Untuk**: Software Engineer / Developer  
+
+## 2.1 Tech Stack
+- **Web (Frontend)**: React 19, Vite 8, TypeScript, Tailwind CSS 4, Motion, Zustand, Axios, TipTap.
+- **Backend**: Node.js 20+, Fastify 5, TypeScript 5, PostgreSQL 15, Redis 7, MinIO, BullMQ, tus server, FFmpeg.
+
+## 2.2 Quick Start Local
+Pastikan Anda memiliki Node.js 20/22 LTS, npm 10+, Docker Desktop, dan FFmpeg.
+
+```bash
+# Clone & Install
 git clone <REPO_URL> rekam
 cd rekam
-Copy-Item .env.example .env
-Copy-Item apps/backend/.env.example apps/backend/.env
-Copy-Item apps/web/.env.example apps/web/.env
-```
-
-Isi semua `CHANGE_ME` dan placeholder di `.env` serta `apps/backend/.env`. Jangan commit file `.env`.
-
-Install dependency:
-
-```powershell
 npm run install:all
-```
 
-Jalankan service infrastruktur:
+# Siapkan environment variables (isi CHANGE_ME)
+cp .env.example .env
+cp apps/backend/.env.example apps/backend/.env
+cp apps/web/.env.example apps/web/.env
 
-```powershell
+# Jalankan infrastruktur lokal (Database, Redis, Minio)
 npm run dev:infra
-```
 
-Migration dan seed:
-
-```powershell
+# Jalankan Migrasi dan Seed
 npm run db:migrate
 npm run db:seed
 npm run db:check
-```
 
-Jalankan backend dan frontend:
-
-```powershell
+# Jalankan server Frontend & Backend mode Development
 npm run dev
 ```
 
-Frontend akan berjalan di `http://localhost:5173`. Untuk akses dari perangkat lain dalam LAN, gunakan Network URL dari Vite, biasanya `http://<IP_LAN>:5173`. Backend listen di `0.0.0.0:3000`, jadi frontend dari perangkat lain akan otomatis memakai hostname browser dan port `3000` jika `VITE_API_BASE_URL` dikosongkan atau disesuaikan.
-
-## Tech Stack
-
-- Web: React 19, Vite 8, TypeScript 6, Tailwind CSS 4, Motion, Anime.js, Zustand, Axios, TipTap, dnd-kit, Sonner
-- Backend: Node.js 20+, Fastify 5, TypeScript 5, PostgreSQL 15, Redis 7, MinIO, BullMQ, tus server, PDFKit, Archiver, Sharp, FFmpeg integration
-- Local infra: Docker Compose for PostgreSQL, Redis, MinIO
-
-## Folder Structure
-
+## 2.3 Folder Structure
 ```text
 rekam/
   apps/
     backend/      Fastify API, migrations, seed, queue workers
-    web/          React/Vite frontend
-  docs/           Handoff, architecture diagrams, API docs, maintenance notes
+    web/          React/Vite frontend (Admin)
+    media-web/    React/Vite frontend (Instansi Media Luar)
+  docs/           Arsitektur, OpenAPI, Handoff
   scripts/        Local developer scripts
   docker-compose.yml
 ```
 
-Architecture level tinggi:
+---
 
-- Frontend menyimpan access token pendek dan mengirim request via Axios.
-- Refresh token disimpan server sebagai HttpOnly cookie dan di Redis.
-- Backend melakukan validasi role, audit log, streaming file, export, dan public QR access.
-- MinIO bucket harus private. File tidak boleh diekspos langsung, hanya lewat API.
+# 🔧 BAGIAN 3: MAINTENANCE & TROUBLESHOOTING
+**Ditujukan Untuk**: Tim Developer & IT Support  
 
-Lihat diagram Mermaid di [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) dan gap terbaru di [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md).
+## 3.1 Troubleshooting Umum
 
-## Environment And Third Party Services
+- **QR Code mengarah ke IP Localhost**:
+  Pastikan Anda mengakses web menggunakan IP Address server atau Domain, bukan `localhost`. Jika terpaksa, pastikan `PUBLIC_BASE_URL` di `apps/backend/.env` sudah diisi dengan domain yang benar. Sistem QR sudah dibuat sangat dinamis membaca request host.
+  
+- **Video Lama Diproses / Macet**:
+  Pastikan `ffmpeg` sudah terinstal di server (`ffmpeg -version`). Cek log pemrosesan dengan perintah `pm2 logs rekam-api`.
 
-File contoh:
+- **Gagal Upload File Besar**:
+  Nginx secara default membatasi ukuran file. Blok Nginx `rekam_nginx.conf` harus memiliki `client_max_body_size 0;` (unlimited) karena aplikasi ini menggunakan protokol *tus* (chunked upload).
 
-- `.env.example` untuk Docker Compose lokal
-- `apps/backend/.env.example` untuk API
-- `apps/web/.env.example` untuk frontend
-
-Service eksternal/lokal yang dipakai:
-
-- PostgreSQL: database utama
-- Redis: refresh token, lockout login, queue backend
-- MinIO: object storage private untuk raw media, processed media, attachments, exports
-- FFmpeg/FFprobe: processing video
-- Optional Cloudflare Tunnel atau DuckDNS/Nginx: akses QR dari luar jaringan pada mode PoC
-
-Credential asli wajib dikirim lewat password manager atau channel aman, bukan chat biasa.
-
-## Database
-
-Migration ada di `apps/backend/src/migrations`. Seed awal ada di `apps/backend/src/seeds/seed.ts`.
-
-Core ERD tersedia di [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Setelah mengubah schema:
-
-```powershell
+## 3.2 Mengubah Skema Database
+Jika Anda melakukan perubahan pada entitas atau relasi database, Anda harus membuat migrasi baru:
+```bash
+cd apps/backend
 npm run db:migrate
 npm run db:check
 ```
 
-## API Documentation
-
-OpenAPI spec tersedia di [docs/openapi.yaml](docs/openapi.yaml). Jika route backend berubah, update file ini di commit yang sama.
-
-## Build Production
-
-```powershell
-npm run build
-```
-
-Output:
-
-- Backend: `apps/backend/dist`
-- Frontend: `apps/web/dist`
-
-Untuk production on-premise, ikuti dokumen asli `../Plan Awal/implementasi_realserver.md` dan catatan handoff di [docs/HANDOFF.md](docs/HANDOFF.md).
-
-Minimum server recommendation untuk single server awal:
-
-- CPU: 4 core
-- RAM: 16 GB
-- Storage: SSD untuk OS/database, HDD/NAS terpisah untuk MinIO media
-- OS: Ubuntu Server 22.04 LTS
-- Runtime: Node.js 20 LTS, PostgreSQL 15, Redis 7, MinIO, Nginx, PM2
-
-Ports:
-
-- Web dev: 5173
-- Backend API: 3000
-- PostgreSQL: 5432
-- Redis: 6379
-- MinIO API: 9000
-- MinIO Console: 9001
-
-## Known Issues And Limitations
-
-- Desktop app/Tauri camera offload belum ada di repo ini. Lihat [docs/HANDOFF.md](docs/HANDOFF.md) untuk scope implementasi berikutnya.
-- Media processing pipeline FFmpeg/Sharp masih perlu diverifikasi end-to-end dengan file video besar.
-- Background export queue belum sepenuhnya async untuk semua export.
-- OpenAPI spec masih manual. Jika ingin auto-generate, integrasikan schema Fastify dengan `@fastify/swagger`.
-- Gap terbaru terhadap Plan Awal diringkas di [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md).
-
-## Git Handoff
-
-Project ini harus dipush ke GitHub/GitLab, bukan dikirim sebagai zip. Repository lokal belum memiliki remote di environment ini, jadi developer harus menjalankan:
-
-```powershell
+## 3.3 Git Handoff (Menyimpan Pekerjaan)
+Project ini harus dipush ke GitHub/GitLab:
+```bash
 git init
 git add .
-git commit -m "handoff: prepare REKAM local implementation"
+git commit -m "handoff: prepare REKAM enterprise architecture"
 git remote add origin <REPO_URL>
 git push -u origin main
 ```
+Pastikan `node_modules`, `.env` lokal, dan file sampah tidak masuk ke commit.
 
-Pastikan `node_modules`, `.env`, file export, dan build output tidak masuk commit.
+---
+**Hak Cipta © Tim REKAM Kominfo.**

@@ -674,7 +674,7 @@ export default function ShareActivityPage() {
                     <div className="flex gap-2 mt-2">
                       <button 
                         onClick={() => {
-                          const url = `${window.location.origin}/share/${share.token}`;
+                          const url = share.public_url || `${window.location.origin}/share/${share.token}`;
                           window.open(url, '_blank');
                         }}
                         className="flex-1 py-2 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg text-xs font-semibold text-gray-700 transition-colors flex items-center justify-center gap-1.5"
@@ -683,7 +683,7 @@ export default function ShareActivityPage() {
                       </button>
                       <button 
                         onClick={() => {
-                          const url = `${window.location.origin}/share/${share.token}`;
+                          const url = share.public_url || `${window.location.origin}/share/${share.token}`;
                           copyToClipboard(url);
                         }}
                         className="py-2 px-3 bg-primary-50 hover:bg-primary-100 border border-primary-100 rounded-lg text-primary-700 transition-colors"

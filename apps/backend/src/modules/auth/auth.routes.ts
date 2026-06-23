@@ -4,13 +4,29 @@ import { z } from 'zod';
 
 // ─── Validation Schemas ──────────────────────
 const loginSchema = z.object({
-  email: z.string().email('Email tidak valid'),
+  username: z.string().min(1, 'Username wajib diisi'),
   password: z.string().min(1, 'Password wajib diisi'),
+});
+
+const updateProfileSchema = z.object({
+  old_password: z.string().optional(),
+  password: z.string().min(8, 'Password minimal 8 karakter').optional().or(z.literal('')),
+  media_website_url: z.string().optional().or(z.literal('')),
+  full_name: z.string().min(3, 'Nama minimal 3 karakter').optional(),
 });
 
 // Konstanta brute force
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_SECONDS = 600; // 10 menit
+
+async function incrementLoginAttempts(fastify: FastifyInstance, attemptsKey: string, lockoutKey: string) {
+  const attempts = await fastify.redis.incr(attemptsKey);
+  if (attempts === 1) await fastify.redis.expire(attemptsKey, LOCKOUT_DURATION_SECONDS);
+  if (attempts >= MAX_LOGIN_ATTEMPTS) {
+    await fastify.redis.set(lockoutKey, '1', 'EX', LOCKOUT_DURATION_SECONDS);
+    await fastify.redis.del(attemptsKey);
+  }
+}
 
 export async function authRoutes(fastify: FastifyInstance) {
   // ─── POST /api/auth/login ──────────────────
@@ -18,8 +34,8 @@ export async function authRoutes(fastify: FastifyInstance) {
     const body = loginSchema.parse(request.body);
 
     // ── Brute Force Protection ──
-    const lockoutKey = `lockout:${body.email}`;
-    const attemptsKey = `login_attempts:${body.email}`;
+    const lockoutKey = `lockout:${body.username}`;
+    const attemptsKey = `login_attempts:${body.username}`;
 
     const lockout = await fastify.redis.get(lockoutKey);
     if (lockout) {
@@ -31,18 +47,18 @@ export async function authRoutes(fastify: FastifyInstance) {
 
     // Cari user di database
     const { rows } = await fastify.db.query(
-      `SELECT u.id, u.email, u.password_hash, u.full_name, u.role, u.district_id, u.is_active,
+      `SELECT u.id, u.username, u.password_hash, u.full_name, u.role, u.district_id, u.media_agency_id, u.is_active,
               u.last_login_at, d.name as district_name,
               (SELECT MAX(created_at) FROM media_files WHERE uploaded_by = u.id) as last_upload_at
        FROM users u
        LEFT JOIN districts d ON d.id = u.district_id
-       WHERE u.email = $1`,
-      [body.email]
+       WHERE u.username = $1`,
+      [body.username]
     );
 
     if (rows.length === 0) {
       await incrementLoginAttempts(fastify, attemptsKey, lockoutKey);
-      return reply.status(401).send({ error: 'Email atau password salah' });
+      return reply.status(401).send({ error: 'Username atau password salah' });
     }
 
     const user = rows[0];
@@ -55,7 +71,7 @@ export async function authRoutes(fastify: FastifyInstance) {
     const passwordValid = await bcrypt.compare(body.password, user.password_hash);
     if (!passwordValid) {
       await incrementLoginAttempts(fastify, attemptsKey, lockoutKey);
-      return reply.status(401).send({ error: 'Email atau password salah' });
+      return reply.status(401).send({ error: 'Username atau password salah' });
     }
 
     // Login sukses → reset counter attempts
@@ -64,9 +80,10 @@ export async function authRoutes(fastify: FastifyInstance) {
     // Generate tokens
     const payload = {
       id: user.id,
-      email: user.email,
+      username: user.username,
       role: user.role,
       district_id: user.district_id,
+      media_agency_id: user.media_agency_id,
     };
 
     const accessToken = fastify.jwt.sign(payload, {
@@ -112,11 +129,12 @@ export async function authRoutes(fastify: FastifyInstance) {
       token: accessToken, // backward compatibility dengan frontend
       user: {
         id: user.id,
-        email: user.email,
+        username: user.username,
         full_name: user.full_name,
         role: user.role,
         district_id: user.district_id,
         district_name: user.district_name,
+        media_agency_id: user.media_agency_id,
         last_login_at: user.last_login_at,
         last_upload_at: user.last_upload_at,
       },
@@ -149,7 +167,7 @@ export async function authRoutes(fastify: FastifyInstance) {
 
       // Ambil data user terbaru
       const { rows } = await fastify.db.query(
-        'SELECT id, email, role, district_id, is_active FROM users WHERE id = $1',
+        'SELECT id, username, role, district_id, media_agency_id, is_active FROM users WHERE id = $1',
         [decoded.id]
       );
 
@@ -160,9 +178,10 @@ export async function authRoutes(fastify: FastifyInstance) {
       const user = rows[0];
       const payload = {
         id: user.id,
-        email: user.email,
+        username: user.username,
         role: user.role,
         district_id: user.district_id,
+        media_agency_id: user.media_agency_id,
       };
 
       const newAccessToken = fastify.jwt.sign(payload, {
@@ -199,16 +218,18 @@ export async function authRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // ─── GET /api/auth/me ──────────────────────
+  // ─── GET /api/auth/me ────────────────────
   fastify.get(
     '/me',
     { preHandler: [fastify.authenticate] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { rows } = await fastify.db.query(
-        `SELECT u.id, u.email, u.full_name, u.role, u.district_id, d.name as district_name, u.last_login_at,
+        `SELECT u.id, u.username, u.full_name, u.role, u.district_id, u.media_agency_id, d.name as district_name, u.last_login_at,
+          ma.name as media_agency_name, ma.media_type, ma.website_url as media_website_url,
           (SELECT MAX(created_at) FROM media_files WHERE uploaded_by = u.id) as last_upload_at
          FROM users u
          LEFT JOIN districts d ON d.id = u.district_id
+         LEFT JOIN media_agencies ma ON ma.id = u.media_agency_id
          WHERE u.id = $1`,
         [request.currentUser!.id]
       );
@@ -220,20 +241,61 @@ export async function authRoutes(fastify: FastifyInstance) {
       return reply.send({ user: rows[0] });
     }
   );
-}
 
-// ─── Helper: Increment login attempts ────────
-async function incrementLoginAttempts(
-  fastify: FastifyInstance,
-  attemptsKey: string,
-  lockoutKey: string
-) {
-  const attempts = await fastify.redis.incr(attemptsKey);
-  await fastify.redis.expire(attemptsKey, LOCKOUT_DURATION_SECONDS);
+  // ─── PUT /api/auth/update-profile ────────
+  fastify.put(
+    '/update-profile',
+    { preHandler: [fastify.authenticate] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const body = updateProfileSchema.parse(request.body);
+      const user = request.currentUser!;
 
-  if (attempts >= MAX_LOGIN_ATTEMPTS) {
-    // Kunci akun selama 10 menit
-    await fastify.redis.set(lockoutKey, '1', 'EX', LOCKOUT_DURATION_SECONDS);
-    await fastify.redis.del(attemptsKey);
-  }
+      try {
+        await fastify.db.query('BEGIN');
+
+        if (body.password) {
+          if (!body.old_password) {
+            return reply.status(400).send({ error: 'Password lama wajib diisi untuk mengubah password' });
+          }
+          
+          const { rows: currentUser } = await fastify.db.query(
+            'SELECT password_hash FROM users WHERE id = $1',
+            [user.id]
+          );
+          
+          const isOldPasswordValid = await bcrypt.compare(body.old_password, currentUser[0].password_hash);
+          if (!isOldPasswordValid) {
+            return reply.status(400).send({ error: 'Password lama tidak cocok' });
+          }
+
+          const passwordHash = await bcrypt.hash(body.password, 12);
+          await fastify.db.query(
+            'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+            [passwordHash, user.id]
+          );
+        }
+
+        if (body.full_name) {
+          await fastify.db.query(
+            'UPDATE users SET full_name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+            [body.full_name, user.id]
+          );
+        }
+
+        if (user.role === 'MEDIA' && user.media_agency_id && body.media_website_url !== undefined) {
+          const url = body.media_website_url || null;
+          await fastify.db.query(
+            'UPDATE media_agencies SET website_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+            [url, user.media_agency_id]
+          );
+        }
+
+        await fastify.db.query('COMMIT');
+        return reply.send({ message: 'Profil berhasil diperbarui' });
+      } catch (err) {
+        await fastify.db.query('ROLLBACK');
+        throw err;
+      }
+    }
+  );
 }

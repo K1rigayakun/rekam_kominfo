@@ -13,7 +13,7 @@ import { MagneticButton } from "../components/MagneticButton";
 export default function UsersPage() {
   const { user } = useAuthStore();
   const prompt = usePrompt();
-  const { confirm } = useConfirm();
+  const { confirm, ConfirmDialog } = useConfirm();
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -24,14 +24,16 @@ export default function UsersPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
-    email: "",
+    username: "",
     full_name: "",
     password: "",
     role: "EDITOR",
     district_id: "",
+    media_agency_id: "",
   });
 
   const [districts, setDistricts] = useState<any[]>([]);
+  const [agencies, setAgencies] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
 
   async function fetchUsers() {
@@ -57,23 +59,25 @@ export default function UsersPage() {
     }
   };
 
-  async function fetchDistricts() {
+  async function fetchDependencies() {
     try {
-      const res = await api.get("/api/districts");
-      setDistricts(res.data.data);
+      const resDist = await api.get("/api/districts");
+      setDistricts(resDist.data.data);
+      const resAg = await api.get("/api/media-agencies");
+      setAgencies(resAg.data);
     } catch (err) {
-      console.error("Gagal memuat grup", err);
+      console.error("Gagal memuat dependencies", err);
     }
   }
 
   useEffect(() => {
     fetchUsers();
-    fetchDistricts();
+    fetchDependencies();
   }, []);
 
   const filteredUsers = users.filter((u) => 
     (u.full_name || "").toLowerCase().includes(search.toLowerCase()) ||
-    (u.email || "").toLowerCase().includes(search.toLowerCase())
+    (u.username || "").toLowerCase().includes(search.toLowerCase())
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -82,19 +86,22 @@ export default function UsersPage() {
     try {
       if (editingId) {
         const payload: any = {
+          username: formData.username,
           full_name: formData.full_name,
           role: formData.role,
-          district_id: formData.district_id || null,
+          district_id: formData.role === "EDITOR" ? (formData.district_id || null) : null,
+          media_agency_id: formData.role === "MEDIA" ? (formData.media_agency_id || null) : null,
         };
         await api.put(`/api/users/${editingId}`, payload);
         toast.success("Pengguna berhasil diperbarui");
       } else {
         const payload: any = {
-          email: formData.email,
+          username: formData.username,
           full_name: formData.full_name,
           password: formData.password,
           role: formData.role,
-          district_id: formData.district_id || null,
+          district_id: formData.role === "EDITOR" ? (formData.district_id || null) : null,
+          media_agency_id: formData.role === "MEDIA" ? (formData.media_agency_id || null) : null,
         };
         await api.post("/api/users", payload);
         toast.success("Pengguna berhasil dibuat");
@@ -151,11 +158,12 @@ export default function UsersPage() {
   const openCreate = () => {
     setEditingId(null);
     setFormData({
-      email: "",
+      username: "",
       full_name: "",
       password: "",
       role: "EDITOR",
       district_id: "",
+      media_agency_id: "",
     });
     setShowModal(true);
   };
@@ -163,11 +171,12 @@ export default function UsersPage() {
   const openEdit = (u: any) => {
     setEditingId(u.id);
     setFormData({
-      email: u.email,
+      username: u.username,
       full_name: u.full_name,
       password: "",
       role: u.role,
       district_id: u.district_id || "",
+      media_agency_id: u.media_agency_id || "",
     });
     setShowModal(true);
   };
@@ -229,9 +238,9 @@ export default function UsersPage() {
           <table ref={tableRef} className="w-full text-left text-sm text-gray-600">
             <thead className="bg-gray-50/50 text-gray-500 border-b border-gray-100">
               <tr>
-                <th className="px-6 py-4 font-semibold rounded-tl-xl">Nama Lengkap & Email</th>
+                <th className="px-6 py-4 font-semibold rounded-tl-xl">Nama Lengkap & Username</th>
                 <th className="px-6 py-4 font-semibold">Role</th>
-                <th className="px-6 py-4 font-semibold">Kecamatan</th>
+                <th className="px-6 py-4 font-semibold">Instansi / Area</th>
                 <th className="px-6 py-4 font-semibold">Status</th>
                 <th className="px-6 py-4 font-semibold">Terakhir Login</th>
                 <th className="px-6 py-4 font-semibold text-right rounded-tr-xl">Aksi</th>
@@ -245,7 +254,7 @@ export default function UsersPage() {
                 >
                   <td className="px-6 py-4">
                       <div className="font-semibold text-gray-900">{u.full_name}</div>
-                      <div className="text-xs text-text-muted">{u.email}</div>
+                      <div className="text-xs text-text-muted">{u.username}</div>
                     </td>
                     <td className="px-5 py-4">
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold ${u.role === "SUPER_ADMIN" ? "bg-red-100 text-red-700" : u.role === "EDITOR" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}>
@@ -253,7 +262,9 @@ export default function UsersPage() {
                         {u.role}
                       </span>
                     </td>
-                    <td className="px-5 py-4">{u.district_name || "-"}</td>
+                    <td className="px-5 py-4">
+                      {u.role === "MEDIA" ? (u.media_agency_name || "-") : (u.district_name || "-")}
+                    </td>
                     <td className="px-5 py-4">
                       <span className={`px-2.5 py-1 rounded-md text-xs font-semibold ${u.is_active ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
                         {u.is_active ? "Aktif" : "Nonaktif"}
@@ -292,6 +303,7 @@ export default function UsersPage() {
       </div>
       </div>
 
+      <ConfirmDialog />
       {showModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl">
@@ -299,22 +311,20 @@ export default function UsersPage() {
               {editingId ? "Edit Pengguna" : "Pengguna Baru"}
             </h2>
             <form onSubmit={handleSubmit} className="space-y-4">
-              {!editingId && (
                 <div>
                   <label className="text-sm font-semibold text-gray-700 mb-1.5 block">
-                    Email
+                    Username
                   </label>
                   <input
-                    type="email"
+                    type="text"
                     required
-                    value={formData.email}
+                    value={formData.username}
                     onChange={(e) =>
-                      setFormData({ ...formData, email: e.target.value })
+                      setFormData({ ...formData, username: e.target.value })
                     }
                     className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500/20 outline-none"
                   />
                 </div>
-              )}
               <div>
                 <label className="text-sm font-semibold text-gray-700 mb-1.5 block">
                   Nama Lengkap
@@ -358,27 +368,53 @@ export default function UsersPage() {
                 >
                   <option value="EDITOR">EDITOR</option>
                   <option value="SUPER_ADMIN">SUPER_ADMIN</option>
+                  <option value="MEDIA">MEDIA</option>
                 </select>
               </div>
-              <div>
-                <label className="text-sm font-semibold text-gray-700 mb-1.5 block">
-                  Kecamatan
-                </label>
-                <select
-                  value={formData.district_id}
-                  onChange={(e) =>
-                    setFormData({ ...formData, district_id: e.target.value })
-                  }
-                  className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500/20 outline-none bg-white"
-                >
-                  <option value="">Tidak ada kecamatan</option>
-                  {districts.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+
+              {formData.role === "EDITOR" && (
+                <div>
+                  <label className="text-sm font-semibold text-gray-700 mb-1.5 block">
+                    Kecamatan
+                  </label>
+                  <select
+                    value={formData.district_id}
+                    onChange={(e) =>
+                      setFormData({ ...formData, district_id: e.target.value })
+                    }
+                    className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500/20 outline-none bg-white"
+                  >
+                    <option value="">Tidak ada kecamatan</option>
+                    {districts.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {formData.role === "MEDIA" && (
+                <div>
+                  <label className="text-sm font-semibold text-gray-700 mb-1.5 block">
+                    Instansi Media
+                  </label>
+                  <select
+                    value={formData.media_agency_id}
+                    onChange={(e) =>
+                      setFormData({ ...formData, media_agency_id: e.target.value })
+                    }
+                    className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500/20 outline-none bg-white"
+                  >
+                    <option value="">Pilih instansi media...</option>
+                    {agencies.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="flex gap-3 pt-4">
                 <button

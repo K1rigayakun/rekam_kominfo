@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { MapPin, Plus, Pencil, Loader2 } from "lucide-react";
+import { MapPin, Plus, Pencil, Trash2, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { api } from "../lib/api";
+import { useConfirm } from "../components/useConfirm";
 import { useAuthStore } from "../stores/authStore";
 import { toast } from "sonner";
 import { AnimatedText } from "../components/AnimatedText";
@@ -9,6 +10,7 @@ import { MagneticButton } from "../components/MagneticButton";
 
 export default function DistrictsPage() {
   const { user } = useAuthStore();
+  const { confirm, ConfirmDialog } = useConfirm();
   const [districts, setDistricts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -37,6 +39,25 @@ export default function DistrictsPage() {
   useEffect(() => {
     fetchDistricts();
   }, []);
+
+  const handleDelete = async (item: any) => {
+    const isConfirmed = await confirm({
+      title: "Hapus Kecamatan",
+      message: `Apakah Anda yakin ingin menghapus kecamatan ${item.name}?`,
+      confirmText: "Hapus",
+      cancelText: "Batal",
+      isDestructive: true
+    });
+    if (isConfirmed) {
+      try {
+        await api.delete(`/api/districts/${item.id}`);
+        toast.success("Kecamatan berhasil dihapus");
+        fetchDistricts();
+      } catch (err: any) {
+        toast.error(err.response?.data?.error || "Gagal menghapus kecamatan");
+      }
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -137,12 +158,20 @@ export default function DistrictsPage() {
                     <MapPin className="w-5 h-5" />
                   </div>
                   {user?.role === "SUPER_ADMIN" && (
-                    <button
-                      onClick={() => openEdit(d)}
-                      className="text-gray-400 hover:text-blue-600 premium-transition w-8 h-8 rounded-full bg-gray-50 hover:bg-blue-50 flex items-center justify-center active:scale-95"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => openEdit(d)}
+                        className="text-gray-400 hover:text-blue-600 premium-transition w-8 h-8 rounded-full bg-gray-50 hover:bg-blue-50 flex items-center justify-center active:scale-95"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(d)}
+                        className="text-gray-400 hover:text-red-600 premium-transition w-8 h-8 rounded-full bg-gray-50 hover:bg-red-50 flex items-center justify-center active:scale-95"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   )}
                 </div>
                 <h3 className="text-lg font-bold text-gray-900 mb-1">{d.name}</h3>
@@ -159,8 +188,9 @@ export default function DistrictsPage() {
       </motion.div>
 
       {/* Modal Form */}
+      <ConfirmDialog />
       <AnimatePresence>
-        {showModal && (
+      {showModal && (
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

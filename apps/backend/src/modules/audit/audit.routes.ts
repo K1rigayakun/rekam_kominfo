@@ -121,11 +121,11 @@ export async function auditRoutes(fastify: FastifyInstance) {
     );
 
     // Build CSV
-    const headers = ['Waktu', 'User', 'Email', 'Aksi', 'Entitas', 'Entity ID', 'Detail', 'IP'];
+    const headers = ['Waktu', 'User', 'Username', 'Aksi', 'Entitas', 'Entity ID', 'Detail', 'IP'];
     const csvRows = rows.map((r: any) => [
       r.created_at ? new Date(r.created_at).toISOString() : '',
       (r.user_name || '').replace(/"/g, '""'),
-      (r.user_email || '').replace(/"/g, '""'),
+      (r.user_username || '').replace(/"/g, '""'),
       r.action || '',
       r.entity_type || '',
       r.entity_id || '',

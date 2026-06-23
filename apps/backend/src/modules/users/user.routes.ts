@@ -3,18 +3,37 @@ import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 
 const createUserSchema = z.object({
-  email: z.string().email('Email tidak valid'),
+  username: z.string().min(1, 'Username wajib diisi'),
   password: z.string().min(8, 'Password minimal 8 karakter'),
   full_name: z.string().min(1, 'Nama lengkap wajib diisi'),
-  role: z.enum(['EDITOR', 'SUPER_ADMIN']).default('EDITOR'),
+  role: z.enum(['EDITOR', 'SUPER_ADMIN', 'MEDIA']).default('EDITOR'),
   district_id: z.string().optional().nullable().transform(v => (v === '' ? null : v)),
+  media_agency_id: z.string().optional().nullable().transform(v => (v === '' ? null : v)),
+}).superRefine((data, ctx) => {
+  if (data.role === 'MEDIA' && !data.media_agency_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Instansi Media wajib dipilih untuk role MEDIA",
+      path: ["media_agency_id"],
+    });
+  }
 });
 
 const updateUserSchema = z.object({
+  username: z.string().min(1).optional(),
   full_name: z.string().min(1).optional(),
-  role: z.enum(['EDITOR', 'SUPER_ADMIN']).optional(),
+  role: z.enum(['EDITOR', 'SUPER_ADMIN', 'MEDIA']).optional(),
   district_id: z.string().optional().nullable().transform(v => (v === '' ? null : v)),
+  media_agency_id: z.string().optional().nullable().transform(v => (v === '' ? null : v)),
   is_active: z.boolean().optional(),
+}).superRefine((data, ctx) => {
+  if (data.role === 'MEDIA' && !data.media_agency_id && data.media_agency_id !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Instansi Media wajib dipilih untuk role MEDIA",
+      path: ["media_agency_id"],
+    });
+  }
 });
 
 const changePasswordSchema = z.object({
@@ -31,10 +50,12 @@ export async function userRoutes(fastify: FastifyInstance) {
     { preHandler: [fastify.requireSuperAdmin] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { rows } = await fastify.db.query(
-        `SELECT u.id, u.email, u.full_name, u.role, u.district_id, 
-                d.name as district_name, u.is_active, u.last_login_at, u.created_at
+        `SELECT u.id, u.username, u.full_name, u.role, u.district_id, 
+                d.name as district_name, u.media_agency_id, ma.name as media_agency_name,
+                u.is_active, u.last_login_at, u.created_at
          FROM users u
          LEFT JOIN districts d ON d.id = u.district_id
+         LEFT JOIN media_agencies ma ON ma.id = u.media_agency_id
          ORDER BY u.created_at DESC`
       );
 
@@ -50,30 +71,30 @@ export async function userRoutes(fastify: FastifyInstance) {
       const body = createUserSchema.parse(request.body);
       const user = request.currentUser!;
 
-      // Cek email unik
+      // Cek username unik
       const { rows: existing } = await fastify.db.query(
-        'SELECT id FROM users WHERE email = $1',
-        [body.email]
+        'SELECT id FROM users WHERE username = $1',
+        [body.username]
       );
 
       if (existing.length > 0) {
-        return reply.status(409).send({ error: 'Email sudah digunakan' });
+        return reply.status(409).send({ error: 'Username sudah digunakan' });
       }
 
       const passwordHash = await bcrypt.hash(body.password, 12);
 
       const { rows } = await fastify.db.query(
-        `INSERT INTO users (email, password_hash, full_name, role, district_id)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, email, full_name, role, district_id, is_active, created_at`,
-        [body.email, passwordHash, body.full_name, body.role, body.district_id || null]
+        `INSERT INTO users (username, password_hash, full_name, role, district_id, media_agency_id)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, username, full_name, role, district_id, media_agency_id, is_active, created_at`,
+        [body.username, passwordHash, body.full_name, body.role, body.district_id || null, body.media_agency_id || null]
       );
 
       // Log audit
       await fastify.db.query(
         `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details, ip_address)
          VALUES ($1, 'CREATE', 'user', $2, $3, $4)`,
-        [user.id, rows[0].id, JSON.stringify({ email: body.email, role: body.role }), request.ip]
+        [user.id, rows[0].id, JSON.stringify({ username: body.username, role: body.role }), request.ip]
       );
 
       return reply.status(201).send({ data: rows[0] });
@@ -88,6 +109,16 @@ export async function userRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const body = updateUserSchema.parse(request.body);
       const user = request.currentUser!;
+
+      if (body.username) {
+        const { rows: existing } = await fastify.db.query(
+          'SELECT id FROM users WHERE username = $1 AND id != $2',
+          [body.username, id]
+        );
+        if (existing.length > 0) {
+          return reply.status(409).send({ error: 'Username sudah digunakan' });
+        }
+      }
 
       const updates: string[] = [];
       const values: any[] = [];
@@ -108,7 +139,7 @@ export async function userRoutes(fastify: FastifyInstance) {
       values.push(id);
       const { rows } = await fastify.db.query(
         `UPDATE users SET ${updates.join(', ')} WHERE id = $${idx}
-         RETURNING id, email, full_name, role, district_id, is_active`,
+         RETURNING id, username, full_name, role, district_id, media_agency_id, is_active`,
         values
       );
 
@@ -182,7 +213,7 @@ export async function userRoutes(fastify: FastifyInstance) {
     }
 
     const { rows } = await fastify.db.query(
-      `SELECT u.id, u.email, u.full_name, u.role, u.district_id, u.is_active,
+      `SELECT u.id, u.username, u.full_name, u.role, u.district_id, u.is_active,
               u.last_login_at, d.name as district_name,
               (SELECT MAX(created_at) FROM media_files WHERE uploaded_by = u.id) as last_upload_at
        FROM users u
@@ -217,7 +248,7 @@ export async function userRoutes(fastify: FastifyInstance) {
       const passwordHash = await bcrypt.hash(newPassword, 12);
 
       const { rows } = await fastify.db.query(
-        'UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING id, email, full_name',
+        'UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING id, username, full_name',
         [passwordHash, id]
       );
 
@@ -232,7 +263,7 @@ export async function userRoutes(fastify: FastifyInstance) {
         [request.currentUser!.id, id, JSON.stringify({ action: 'reset_password' }), request.ip]
       );
 
-      return reply.send({ message: `Password untuk ${rows[0].email} berhasil direset` });
+      return reply.send({ message: `Password untuk ${rows[0].username} berhasil direset` });
     }
   );
 
@@ -244,7 +275,7 @@ export async function userRoutes(fastify: FastifyInstance) {
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const { id } = request.params;
       
-      const { rows } = await fastify.db.query('SELECT role, email FROM users WHERE id = $1', [id]);
+      const { rows } = await fastify.db.query('SELECT role, username FROM users WHERE id = $1', [id]);
       
       if (rows.length === 0) {
         return reply.status(404).send({ error: 'User tidak ditemukan' });
@@ -260,7 +291,7 @@ export async function userRoutes(fastify: FastifyInstance) {
       await fastify.db.query(
         `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details, ip_address)
          VALUES ($1, 'DELETE', 'user', $2, $3, $4)`,
-        [request.currentUser!.id, id, JSON.stringify({ action: 'delete_user', email: rows[0].email }), request.ip]
+        [request.currentUser!.id, id, JSON.stringify({ action: 'delete_user', username: rows[0].username }), request.ip]
       );
 
       return reply.send({ message: 'User berhasil dihapus' });

@@ -20,6 +20,8 @@ const AuditPage = lazy(() => import('./pages/AuditPage'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));
 const ActivityVersionsPage = lazy(() => import('./pages/ActivityVersionsPage'));
 const DesktopOffloaderPage = lazy(() => import('./pages/DesktopOffloader'));
+const MediaAgenciesPage = lazy(() => import('./pages/MediaAgenciesPage'));
+const AdminNewsCoveragesPage = lazy(() => import('./pages/AdminNewsCoveragesPage'));
 
 function RouteFallback() {
   return (
@@ -130,6 +132,8 @@ function App() {
           <Route path="/audit" element={<AuditPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/offloader" element={<DesktopOffloaderPage />} />
+          <Route path="/media-agencies" element={<MediaAgenciesPage />} />
+          <Route path="/news-coverages" element={<AdminNewsCoveragesPage />} />
         </Route>
         
         {/* Route fallback */}

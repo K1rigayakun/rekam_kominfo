@@ -38,7 +38,7 @@ export async function teamRoutes(fastify: FastifyInstance) {
 
     // Ambil anggota tim
     const { rows: members } = await fastify.db.query(
-      `SELECT u.id, u.email, u.full_name, u.role, u.is_active, u.last_login_at, d.name as district_name
+      `SELECT u.id, u.username, u.full_name, u.role, u.is_active, u.last_login_at, d.name as district_name
        FROM users u
        JOIN team_members tm ON tm.user_id = u.id
        LEFT JOIN districts d ON d.id = u.district_id
@@ -193,6 +193,31 @@ export async function teamRoutes(fastify: FastifyInstance) {
       );
 
       return reply.send({ message: 'Anggota berhasil dihapus dari tim' });
+    }
+  );
+
+  // ─── DELETE /api/teams/:id ─────────────────
+  fastify.delete<{ Params: { id: string } }>(
+    '/:id',
+    { preHandler: [fastify.requireSuperAdmin] },
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const { id } = request.params;
+      const user = request.currentUser!;
+
+      const { rowCount } = await fastify.db.query('DELETE FROM teams WHERE id = $1', [id]);
+
+      if (rowCount === 0) {
+        return reply.status(404).send({ error: 'Tim tidak ditemukan' });
+      }
+
+      // Log audit
+      await fastify.db.query(
+        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details, ip_address)
+         VALUES ($1, 'DELETE', 'team', $2, $3, $4)`,
+        [user.id, id, '{}', request.ip]
+      );
+
+      return reply.send({ message: 'Tim berhasil dihapus' });
     }
   );
 }

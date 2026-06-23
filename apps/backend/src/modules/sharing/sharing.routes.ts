@@ -110,7 +110,12 @@ export async function sharingRoutes(fastify: FastifyInstance) {
       [activityId]
     );
 
-    return reply.send({ data: rows });
+    const mappedRows = rows.map((row: any) => ({
+      ...row,
+      public_url: `${resolvePublicBaseUrl(request)}/share/${row.token}`
+    }));
+
+    return reply.send({ data: mappedRows });
   });
 
   // ─── GET /api/sharing/:id ─────────────────

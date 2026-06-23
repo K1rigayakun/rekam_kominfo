@@ -6,9 +6,10 @@ declare module 'fastify' {
   interface FastifyRequest {
     currentUser?: {
       id: string;
-      email: string;
+      username: string;
       role: string;
       district_id: string | null;
+      media_agency_id: string | null;
     };
   }
 }
@@ -24,9 +25,10 @@ async function authPluginCallback(fastify: FastifyInstance) {
         }
         const decoded = await request.jwtVerify<{
           id: string;
-          email: string;
+          username: string;
           role: string;
           district_id: string | null;
+          media_agency_id: string | null;
         }>();
         request.currentUser = decoded;
       } catch (err) {

@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Plus, Pencil, Loader2, Tag } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Tag } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { api } from "../lib/api";
+import { useConfirm } from "../components/useConfirm";
 import { useAuthStore } from "../stores/authStore";
 import { toast } from "sonner";
 import { AnimatedText } from "../components/AnimatedText";
@@ -9,6 +10,7 @@ import { MagneticButton } from "../components/MagneticButton";
 
 export default function TagsPage() {
   const { user } = useAuthStore();
+  const { confirm, ConfirmDialog } = useConfirm();
   const [tags, setTags] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -37,6 +39,25 @@ export default function TagsPage() {
   useEffect(() => {
     fetchTags();
   }, []);
+
+  const handleDelete = async (item: any) => {
+    const isConfirmed = await confirm({
+      title: "Hapus Tag",
+      message: `Apakah Anda yakin ingin menghapus tag ${item.name}?`,
+      confirmText: "Hapus",
+      cancelText: "Batal",
+      isDestructive: true
+    });
+    if (isConfirmed) {
+      try {
+        await api.delete(`/api/tags/${item.id}`);
+        toast.success("Tag berhasil dihapus");
+        fetchTags();
+      } catch (err: any) {
+        toast.error(err.response?.data?.error || "Gagal menghapus tag");
+      }
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -137,12 +158,20 @@ export default function TagsPage() {
                     <Tag className="w-5 h-5" />
                   </div>
                   {user?.role === "SUPER_ADMIN" && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); openEdit(t); }}
-                      className="text-gray-400 hover:text-blue-600 premium-transition w-8 h-8 rounded-full bg-gray-50 hover:bg-blue-50 flex items-center justify-center active:scale-95"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openEdit(t); }}
+                        className="text-gray-400 hover:text-blue-600 premium-transition w-8 h-8 rounded-full bg-gray-50 hover:bg-blue-50 flex items-center justify-center active:scale-95"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDelete(t); }}
+                        className="text-gray-400 hover:text-red-600 premium-transition w-8 h-8 rounded-full bg-gray-50 hover:bg-red-50 flex items-center justify-center active:scale-95"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   )}
                 </div>
                 <h3 className="text-lg font-bold text-gray-900 mb-1">{t.name}</h3>
@@ -159,8 +188,9 @@ export default function TagsPage() {
       </motion.div>
 
       {/* Modal Form */}
+      <ConfirmDialog />
       <AnimatePresence>
-        {showModal && (
+      {showModal && (
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

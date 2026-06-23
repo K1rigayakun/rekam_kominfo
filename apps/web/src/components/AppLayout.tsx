@@ -16,6 +16,8 @@ import { api } from '../lib/api';
 
 const navItems = [
   { to: '/', label: 'Acara', icon: Calendar, roles: ['SUPER_ADMIN', 'EDITOR'] },
+  { to: '/news-coverages', label: 'Berita Media', icon: Users, roles: ['SUPER_ADMIN'] },
+  { to: '/media-agencies', label: 'Instansi Media', icon: Building2, roles: ['SUPER_ADMIN'] },
   { to: '/users', label: 'Pengguna', icon: Users, roles: ['SUPER_ADMIN'] },
   { to: '/teams', label: 'Tim Liputan', icon: Building2, roles: ['SUPER_ADMIN'] },
   { to: '/tags', label: 'Tag Event', icon: Tag, roles: ['SUPER_ADMIN'] },

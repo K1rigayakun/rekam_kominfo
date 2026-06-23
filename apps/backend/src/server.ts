@@ -32,6 +32,8 @@ import { districtRoutes } from './modules/districts/district.routes';
 import { exportRoutes } from './modules/export/export.routes';
 import { personRoutes } from './modules/persons/person.routes';
 import { tagsRoutes } from './modules/tags/tags.routes';
+import { mediaAgenciesRoutes } from './modules/media-agencies/media_agencies.routes';
+import { newsCoveragesRoutes } from './modules/news-coverages/news_coverages.routes';
 
 function requireEnv(name: string) {
   const value = process.env[name];
@@ -99,9 +101,9 @@ async function main() {
   // ─── Global Error Handler ──────────
   server.setErrorHandler((error, request, reply) => {
     if (isZodValidationError(error)) {
-      server.log.warn({ err: error }, 'Zod validation error');
+      server.log.warn({ err: error }, 'Zod validation error'); console.error("ZOD_ERROR_DETAILS", JSON.stringify((error as any).errors || (error as any).issues));
       return reply.status(400).send({
-        error: 'Validasi gagal',
+        error: ((error as any).errors || (error as any).issues)?.[0]?.message || 'Validasi gagal',
         details: (error as any).errors || (error as any).issues
       });
     }
@@ -198,13 +200,15 @@ async function main() {
   await server.register(auditRoutes, { prefix: '/api/audit' });
   await server.register(exportRoutes, { prefix: '/api/export' });
   await server.register(personRoutes, { prefix: '/api/persons' });
+  await server.register(mediaAgenciesRoutes, { prefix: '/api/media-agencies' });
+  await server.register(newsCoveragesRoutes, { prefix: '/api/news-coverages' });
 
   // ─── Global Error Handler ──────────
   server.setErrorHandler((error, request, reply) => {
     if (isZodValidationError(error)) {
-      server.log.warn({ err: error }, 'Zod validation error');
+      server.log.warn({ err: error }, 'Zod validation error'); console.error("ZOD_ERROR_DETAILS", JSON.stringify((error as any).errors || (error as any).issues));
       return reply.status(400).send({
-        error: 'Validasi gagal',
+        error: ((error as any).errors || (error as any).issues)?.[0]?.message || 'Validasi gagal',
         details: (error as any).errors || (error as any).issues
       });
     }

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Users, Plus, Pencil, Loader2, Search, Filter } from "lucide-react";
+import { Users, Plus, Pencil, Trash2, Loader2, Search, Filter } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { api } from "../lib/api";
+import { useConfirm } from "../components/useConfirm";
 import { useAuthStore } from "../stores/authStore";
 import { toast } from "sonner";
 import { AnimatedText } from "../components/AnimatedText";
@@ -11,6 +12,7 @@ import { MagneticButton } from "../components/MagneticButton";
 export default function TeamsPage() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
+  const { confirm, ConfirmDialog } = useConfirm();
   const [teams, setTeams] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -45,6 +47,25 @@ export default function TeamsPage() {
     fetchTeams();
     api.get("/api/tags").then(res => setTags(res.data.data)).catch(console.error);
   }, []);
+
+  const handleDelete = async (item: any) => {
+    const isConfirmed = await confirm({
+      title: "Hapus Tim Liputan",
+      message: `Apakah Anda yakin ingin menghapus tim liputan ${item.name}?`,
+      confirmText: "Hapus",
+      cancelText: "Batal",
+      isDestructive: true
+    });
+    if (isConfirmed) {
+      try {
+        await api.delete(`/api/teams/${item.id}`);
+        toast.success("Tim liputan berhasil dihapus");
+        fetchTeams();
+      } catch (err: any) {
+        toast.error(err.response?.data?.error || "Gagal menghapus tim liputan");
+      }
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -214,12 +235,20 @@ export default function TeamsPage() {
                             <Users className="w-5 h-5" />
                           </div>
                           {user?.role === "SUPER_ADMIN" && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); openEdit(t); }}
-                              className="text-gray-400 hover:text-blue-600 premium-transition w-8 h-8 rounded-full bg-gray-50 hover:bg-blue-50 flex items-center justify-center active:scale-95"
-                            >
-                              <Pencil className="w-4 h-4" />
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); openEdit(t); }}
+                                className="text-gray-400 hover:text-blue-600 premium-transition w-8 h-8 rounded-full bg-gray-50 hover:bg-blue-50 flex items-center justify-center active:scale-95"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleDelete(t); }}
+                                className="text-gray-400 hover:text-red-600 premium-transition w-8 h-8 rounded-full bg-gray-50 hover:bg-red-50 flex items-center justify-center active:scale-95"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           )}
                         </div>
                         <h3 className="text-lg font-bold text-gray-900 mb-1">{t.name}</h3>
@@ -246,8 +275,9 @@ export default function TeamsPage() {
       </motion.div>
 
       {/* Modal Form */}
+      <ConfirmDialog />
       <AnimatePresence>
-        {showModal && (
+      {showModal && (
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

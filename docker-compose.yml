@@ -1,60 +1,75 @@
-# docker-compose.yml
+version: '3.8'
+
 services:
+  # ─── DATABASE ─────────────────────────────
   postgres:
     image: postgres:15-alpine
-    container_name: rekam_postgres
-    restart: unless-stopped
+    container_name: rekam_db
+    restart: always
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
-      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_USER: rekam_app
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-SecretPassword123!}
+      POSTGRES_DB: rekam_prod
+    volumes:
+      - rekam_pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+    networks:
+      - rekam_net
 
+  # ─── CACHE & QUEUE ─────────────────────────
   redis:
     image: redis:7-alpine
     container_name: rekam_redis
-    restart: unless-stopped
-    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"]
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    restart: always
+    command: redis-server --requirepass ${REDIS_PASSWORD:-SecretRedis123!} --maxmemory 1gb --maxmemory-policy allkeys-lru
+    volumes:
+      - rekam_redisdata:/data
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+    networks:
+      - rekam_net
 
+  # ─── OBJECT STORAGE ────────────────────────
   minio:
-    image: minio/minio:latest
+    image: minio/minio
     container_name: rekam_minio
-    restart: unless-stopped
+    restart: always
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
-    ports:
-      - "9000:9000"   # API port
-      - "9001:9001"   # Console port (web UI)
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-rekam_minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-SecretMinio123!@#}
     volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      - rekam_miniodata:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - rekam_net
+
+  # ─── INITIALIZE MINIO BUCKETS ──────────────
+  minio-init:
+    image: minio/mc
+    container_name: rekam_minio_init
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set myminio http://minio:9000 ${MINIO_ACCESS_KEY:-rekam_minio_admin} ${MINIO_SECRET_KEY:-SecretMinio123!@#};
+      mc mb myminio/rekam-raw --ignore-existing;
+      mc mb myminio/rekam-processed --ignore-existing;
+      mc mb myminio/rekam-attach --ignore-existing;
+      mc mb myminio/rekam-exports --ignore-existing;
+      "
+    networks:
+      - rekam_net
 
 volumes:
-  postgres_data:
-  redis_data:
-  minio_data:
+  rekam_pgdata:
+  rekam_redisdata:
+  rekam_miniodata:
+
+networks:
+  rekam_net:
+    driver: bridge
