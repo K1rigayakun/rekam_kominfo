@@ -43,11 +43,10 @@ cp apps/media-web/.env.example apps/media-web/.env
 npm run dev:infra
 ```
 
-### Langkah 4: Migrasi Database & Data Awal (Seeding)
+### Langkah 4: Migrasi Database & Bikin Admin Pertama
 ```bash
 npm run db:migrate
-npm run db:seed
-npm run db:check
+cd apps/backend && npm run db:init-admin
 ```
 
 ### Langkah 5: Menjalankan Aplikasi (Mode Development)

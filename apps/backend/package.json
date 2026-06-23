@@ -8,10 +8,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "db:migrate": "tsx src/migrations/run.ts",
-    "db:seed": "tsx src/seeds/seed.ts",
-    "db:seed:sample": "tsx src/seeds/sample.ts",
-    "db:reset": "tsx src/migrations/reset.ts",
-    "db:check": "tsx src/migrations/check.ts",
+    "db:init-admin": "tsx src/scripts/init_admin.ts",
     "queue:media": "tsx src/queues/media_processor.ts",
     "queue:export": "tsx src/queues/export_processor.ts",
     "queue:integrity": "tsx src/queues/integrity_checker.ts"
