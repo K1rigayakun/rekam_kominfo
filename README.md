@@ -28,7 +28,13 @@ docker-compose up -d
 ```
 
 ### 🧰 B. Setup Aplikasi Node.js (Aplikasi REKAM)
-Gunakan *script* otomatis yang telah disediakan:
+Salin konfigurasi production ke masing-masing environment:
+```bash
+cp apps/backend/.env.production apps/backend/.env
+cp apps/web/.env.production apps/web/.env
+cp apps/media-web/.env.production apps/media-web/.env
+```
+Gunakan *script* otomatis yang telah disediakan untuk *build* dan *run*:
 ```bash
 chmod +x deploy-helper.sh
 ./deploy-helper.sh
