@@ -91,7 +91,26 @@ cp apps/backend/.env.production apps/backend/.env
 cp apps/web/.env.production apps/web/.env
 cp apps/media-web/.env.production apps/media-web/.env
 ```
-*(Wajib buka `apps/backend/.env` dan ubah JWT Secret serta password database sebelum go-live!)*
+
+**DAFTAR NILAI (VALUE) YANG WAJIB DIGANTI OLEH TIM IT:**
+
+**1. apps/backend/.env**
+- `DATABASE_URL`: Ganti tulisan `GANTI_PASSWORD` dengan password database yang disetting di `docker-compose.yml`. Gunakan `localhost` jika backend dan database berada di server yang sama.
+- `REDIS_URL`: Ganti `GANTI_REDIS_PASSWORD` dengan password Redis dari `docker-compose.yml`.
+- `MINIO_ENDPOINT` & Port: Gunakan `127.0.0.1` port `9000` jika di server yang sama.
+- `MINIO_ACCESS_KEY` & `MINIO_SECRET_KEY`: Samakan dengan kredensial MinIO di `docker-compose.yml`.
+- `JWT_ACCESS_SECRET` & `JWT_REFRESH_SECRET`: Wajib generate string acak rahasia minimal 64 karakter (contoh via terminal: `openssl rand -hex 64`). Jangan biarkan default!
+- `APP_BASE_URL` & `PUBLIC_BASE_URL`: Ganti dengan URL domain publik API ini (misal: `https://api.rekam.kominfo.go.id`).
+
+**2. apps/web/.env dan apps/media-web/.env**
+- `VITE_API_URL`: Wajib diisi dengan **URL Domain Publik** dari backend (`https://api.rekam.kominfo.go.id`). Jangan menggunakan `localhost`.
+
+**3. Pembuatan Akun Super Admin Pertama**
+Setelah backend berjalan, jalankan perintah ini di dalam server (di dalam folder `apps/backend`) untuk membuat akun admin pertama:
+```bash
+npx tsx src/scripts/init_admin.ts "PasswordSuperAman123!"
+```
+Username otomatis adalah `admin`. Berikan akun ini ke pihak yang berwenang.
 
 ### C. Build & Run (Node.js & PM2)
 Gunakan script robot otomatis yang sudah kami siapkan:
