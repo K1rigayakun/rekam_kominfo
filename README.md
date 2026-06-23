@@ -96,14 +96,20 @@ cp apps/media-web/.env.production apps/media-web/.env
 
 **1. apps/backend/.env**
 - `DATABASE_URL`: Ganti tulisan `GANTI_PASSWORD` dengan password database yang disetting di `docker-compose.yml`. Gunakan `localhost` jika backend dan database berada di server yang sama.
+  *Contoh:* `DATABASE_URL=postgresql://rekam_app:P@ssw0rdKuat123!@localhost:5432/rekam_prod`
 - `REDIS_URL`: Ganti `GANTI_REDIS_PASSWORD` dengan password Redis dari `docker-compose.yml`.
+  *Contoh:* `REDIS_URL=redis://:RedisS3cr3t!@localhost:6379`
 - `MINIO_ENDPOINT` & Port: Gunakan `127.0.0.1` port `9000` jika di server yang sama.
+  *Contoh:* `MINIO_ENDPOINT=127.0.0.1`
 - `MINIO_ACCESS_KEY` & `MINIO_SECRET_KEY`: Samakan dengan kredensial MinIO di `docker-compose.yml`.
 - `JWT_ACCESS_SECRET` & `JWT_REFRESH_SECRET`: Wajib generate string acak rahasia minimal 64 karakter (contoh via terminal: `openssl rand -hex 64`). Jangan biarkan default!
-- `APP_BASE_URL` & `PUBLIC_BASE_URL`: Ganti dengan URL domain publik API ini (misal: `https://api.rekam.kominfo.go.id`).
+  *Contoh:* `JWT_ACCESS_SECRET=a8b3c9...[panjang]...xyz`
+- `APP_BASE_URL` & `PUBLIC_BASE_URL`: Ganti dengan URL domain publik API ini.
+  *Contoh:* `PUBLIC_BASE_URL=https://api.rekam.kominfo.go.id`
 
 **2. apps/web/.env dan apps/media-web/.env**
-- `VITE_API_URL`: Wajib diisi dengan **URL Domain Publik** dari backend (`https://api.rekam.kominfo.go.id`). Jangan menggunakan `localhost`.
+- `VITE_API_URL`: Wajib diisi dengan **URL Domain Publik** dari backend. Jangan menggunakan `localhost`.
+  *Contoh:* `VITE_API_URL=https://api.rekam.kominfo.go.id`
 
 **3. Pembuatan Akun Super Admin Pertama**
 Setelah backend berjalan, jalankan perintah ini di dalam server (di dalam folder `apps/backend`) untuk membuat akun admin pertama:
